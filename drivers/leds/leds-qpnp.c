@@ -252,7 +252,10 @@
 #define KPDBL_MODULE_EN_MASK		0x80
 #define NUM_KPDBL_LEDS			4
 #define KPDBL_MASTER_BIT_INDEX		0
+
+#ifndef CONFIG_CUSTOM_ROM
 static u8	shutdown_enable = 0;
+#endif
 
 #define LED_SPEED_MAX			20
 #define LED_SPEED_STOCK_MODE	0
@@ -2683,12 +2686,17 @@ static ssize_t duty_pcts_store(struct device *dev,
 	struct led_classdev *led_cdev = dev_get_drvdata(dev);
 	char *buffer;
 	ssize_t ret;
+#ifndef CONFIG_CUSTOM_ROM
 	int rets;
-	//int i = 0;
+#else
+	int i = 0;
+#endif
 	int max_duty_pcts;
 	struct pwm_config_data *pwm_cfg;
 	u32 previous_num_duty_pcts;
-	//int value;
+#ifdef CONFIG_CUSTOM_ROM
+	int value;
+#endif
 	int *previous_duty_pcts;
 
 	led = container_of(led_cdev, struct qpnp_led_data, cdev);
@@ -2719,6 +2727,7 @@ static ssize_t duty_pcts_store(struct device *dev,
 
 	buffer = (char *)buf;
 
+#ifndef CONFIG_CUSTOM_ROM
 	rets= sscanf((const char *)buffer,
 		"bean %x %x %x %x %x %x %x %x %x %x %x ",
 			    &pwm_cfg->old_duty_pcts[0], &pwm_cfg->old_duty_pcts[1],
@@ -2732,9 +2741,21 @@ static ssize_t duty_pcts_store(struct device *dev,
 	{
 		pr_err("duty_pcts_store: Invalid paramter:%d\n", rets);
 			return -1;
+#else
+	for (i = 0; i < max_duty_pcts; i++) {
+		if (buffer == NULL)
+			break;
+		ret = sscanf((const char *)buffer, "%u,%s", &value, buffer);
+		pwm_cfg->old_duty_pcts[i] = value;
+		num_duty_pcts++;
+		if (ret <= 1)
+			break;
+#endif
 	}
 
+#ifndef CONFIG_CUSTOM_ROM
 	num_duty_pcts = 11;
+#endif
 
 
 	if (num_duty_pcts >= max_duty_pcts) {
@@ -2970,6 +2991,7 @@ static ssize_t store_led_speed(struct device *dev,
 	return count;
 }
 
+#ifndef CONFIG_CUSTOM_ROM
 static ssize_t shutdown_enable_show(struct device *dev,
 				 struct device_attribute *attr,
 				 char *buf)
@@ -3004,6 +3026,7 @@ static ssize_t shutdown_enable_store(struct device *dev,
 
 	return count;
 }
+#endif
 
 static inline void rgb_lock_leds(struct rgb_sync *rgb)
 {
@@ -3142,7 +3165,9 @@ static DEVICE_ATTR(blink, 0664, NULL, blink_store);
 static DEVICE_ATTR(led_fade, S_IWUSR | S_IRUGO, show_led_fade, store_led_fade);
 static DEVICE_ATTR(led_intensity, S_IWUSR | S_IRUGO, show_led_intensity, store_led_intensity);
 static DEVICE_ATTR(led_speed, S_IWUSR | S_IRUGO, show_led_speed, store_led_speed);
+#ifndef CONFIG_CUSTOM_ROM
 static DEVICE_ATTR(enable, 0644, shutdown_enable_show, shutdown_enable_store);
+#endif
 static DEVICE_ATTR(rgb_blink, 0664, NULL, rgb_blink_store);
 
 static struct attribute *led_attrs[] = {
@@ -3162,7 +3187,9 @@ static struct attribute *rgb_blink_attrs[] = {
 
 static struct attribute *pwm_attrs[] = {
 	&dev_attr_pwm_us.attr,
+#ifndef CONFIG_CUSTOM_ROM
 	&dev_attr_enable.attr,
+#endif
 	NULL
 };
 
@@ -4695,6 +4722,7 @@ static int qpnp_leds_remove(struct platform_device *pdev)
 	return 0;
 }
 
+#ifndef CONFIG_CUSTOM_ROM
 static void qpnp_leds_shutdown(struct platform_device *pdev)
 {
 	struct qpnp_led_data *led_array = dev_get_drvdata(&pdev->dev);
@@ -4725,6 +4753,7 @@ static void qpnp_leds_shutdown(struct platform_device *pdev)
 		__qpnp_led_work(led_array+i, led_array[i].cdev.brightness);
 	}
 }
+#endif
 
 #ifdef CONFIG_OF
 static const struct of_device_id spmi_match_table[] = {
@@ -4742,7 +4771,9 @@ static struct platform_driver qpnp_leds_driver = {
 	},
 	.probe		= qpnp_leds_probe,
 	.remove		= qpnp_leds_remove,
+#ifndef CONFIG_CUSTOM_ROM
 	.shutdown	= qpnp_leds_shutdown,
+#endif
 };
 
 static int __init qpnp_led_init(void)
