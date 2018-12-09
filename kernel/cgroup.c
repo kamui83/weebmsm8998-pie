@@ -61,6 +61,7 @@
 #include <linux/atomic.h>
 #include <linux/cpu_input_boost.h>
 #include <linux/devfreq_boost.h>
+#include <linux/state_notifier.h>
 
 /*
  * pidlists linger the following amount before being destroyed.  The goal
@@ -2782,9 +2783,9 @@ static ssize_t __cgroup_procs_write(struct kernfs_open_file *of, char *buf,
  	    !memcmp(tsk->comm, "coilsw.launcher", sizeof("coilsw.launcher")) ||
  	    !memcmp(tsk->comm, "neplus.launcher", sizeof("neplus.launcher")) ||
  	    !memcmp(tsk->comm, "pe.lawnchair.ci", sizeof("pe.lawnchair.ci"))) &&
-	    !memcmp(cgrp->kn->name, "top-app", sizeof("top-app")) && !ret) {
-		cpu_input_boost_kick_max(1000);
-		devfreq_boost_kick_max(DEVFREQ_MSM_CPUBW, 1000);
+	    !memcmp(cgrp->kn->name, "top-app", sizeof("top-app")) && !ret && !state_suspended) {
+			cpu_input_boost_kick_max(1000);
+			devfreq_boost_kick_max(DEVFREQ_MSM_CPUBW, 1000);
 	}
 	put_task_struct(tsk);
 	goto out_unlock_threadgroup;
