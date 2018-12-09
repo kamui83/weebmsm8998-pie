@@ -255,13 +255,7 @@ static int fb_notifier_cb(struct notifier_block *nb,
 	/* Boost when the screen turns on and unboost when it turns off */
 	screen_awake = *blank == FB_BLANK_UNBLANK;
 	devfreq_disable_boosting(d, !screen_awake);
-	if (screen_awake) {
-		int i;
-
-		for (i = 0; i < DEVFREQ_MAX; i++)
-			__devfreq_boost_kick_max(d->devices + i,
-				CONFIG_DEVFREQ_WAKE_BOOST_DURATION_MS);
-	} else {
+	if (!screen_awake) {
 		devfreq_unboost_all(d);
 	}
 
