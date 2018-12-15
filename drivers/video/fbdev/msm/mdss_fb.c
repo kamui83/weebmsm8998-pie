@@ -981,8 +981,12 @@ static ssize_t mdss_fb_set_srgb_mode(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(SRGB, S_IRUGO | S_IWUSR,
-	mdss_fb_get_srgb_mode, mdss_fb_set_srgb_mode);
+#ifndef CUSTOM_ROM
+	static DEVICE_ATTR(SRGB, S_IRUGO | S_IWUSR,
+#else
+	static DEVICE_ATTR(srgb, S_IRUGO | S_IWUSR,
+#endif
+		mdss_fb_get_srgb_mode, mdss_fb_set_srgb_mode);
 
 
 static ssize_t mdss_fb_get_adobe_rgb_mode(struct device *dev,
@@ -1023,8 +1027,12 @@ static ssize_t mdss_fb_set_adobe_rgb_mode(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(Adobe_RGB, S_IRUGO | S_IWUSR,
-	mdss_fb_get_adobe_rgb_mode, mdss_fb_set_adobe_rgb_mode);
+#ifndef CUSTOM_ROM
+	static DEVICE_ATTR(Adobe_RGB, S_IRUGO | S_IWUSR,
+#else
+	static DEVICE_ATTR(adobe_rgb, S_IRUGO | S_IWUSR,
+#endif
+		mdss_fb_get_adobe_rgb_mode, mdss_fb_set_adobe_rgb_mode);
 
 static ssize_t mdss_fb_get_dci_p3_mode(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -1064,8 +1072,12 @@ static ssize_t mdss_fb_set_dci_p3_mode(struct device *dev,
 	return count;
 }
 
-static DEVICE_ATTR(DCI_P3, S_IRUGO | S_IWUSR,
-	mdss_fb_get_dci_p3_mode, mdss_fb_set_dci_p3_mode);
+#ifndef CUSTOM_ROM
+	static DEVICE_ATTR(DCI_P3, S_IRUGO | S_IWUSR,
+#else
+	static DEVICE_ATTR(dci_p3, S_IRUGO | S_IWUSR,
+#endif
+		mdss_fb_get_dci_p3_mode, mdss_fb_set_dci_p3_mode);
 
 static ssize_t mdss_fb_get_night_mode(struct device *dev,
 		struct device_attribute *attr, char *buf)
@@ -1252,11 +1264,19 @@ static struct attribute *mdss_fb_attrs[] = {
 	&dev_attr_msm_fb_panel_status.attr,
 	&dev_attr_msm_fb_dfps_mode.attr,
 	&dev_attr_measured_fps.attr,
+#ifndef CUSTOM_ROM
 	&dev_attr_SRGB.attr,
 	&dev_attr_hbm.attr,
 	&dev_attr_Adobe_RGB.attr,
 
 	&dev_attr_DCI_P3.attr,
+#else
+	&dev_attr_srgb.attr,
+	&dev_attr_hbm.attr,
+	&dev_attr_adobe_rgb.attr,
+
+	&dev_attr_dci_p3.attr,
+#endif
 
 	&dev_attr_night_mode.attr,
 	&dev_attr_adaption_mode.attr,
