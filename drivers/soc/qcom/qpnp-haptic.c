@@ -1432,7 +1432,6 @@ static ssize_t qpnp_hap_ramp_test_data_show(struct device *dev,
 
 }
 
-#ifndef CONFIG_CUSTOM_ROM
 static ssize_t qpnp_hap_min_show(struct device *dev,
 					struct device_attribute *attr,
 					char *buf)
@@ -1465,7 +1464,6 @@ static ssize_t qpnp_hap_default_show(struct device *dev,
 
 	return scnprintf(buf, PAGE_SIZE, "%d\n", hap->vtg_default);
 }
-#endif // CONFIG_CUSTOM_ROM
 
 /* sysfs attributes */
 static struct device_attribute qpnp_hap_attrs[] = {
