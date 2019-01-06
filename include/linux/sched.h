@@ -2303,7 +2303,6 @@ extern void thread_group_cputime_adjusted(struct task_struct *p, cputime_t *ut, 
 /*
  * Per process flags
  */
-#define PF_WAKE_UP_IDLE 0x00000002	/* try to wake up on an idle CPU */
 #define PF_EXITING	0x00000004	/* getting shut down */
 #define PF_EXITPIDONE	0x00000008	/* pi exit done on shut down */
 #define PF_VCPU		0x00000010	/* I'm a virtual CPU */
@@ -2501,9 +2500,6 @@ static inline bool cpupri_check_rt(void)
 	return false;
 }
 #endif
-
-extern u32 sched_get_wake_up_idle(struct task_struct *p);
-extern int sched_set_wake_up_idle(struct task_struct *p, int wake_up_idle);
 
 #ifdef CONFIG_NO_HZ_COMMON
 void calc_load_enter_idle(void);
