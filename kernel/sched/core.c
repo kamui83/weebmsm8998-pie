@@ -95,38 +95,6 @@
 #include <trace/events/sched.h>
 #include "walt.h"
 
-static atomic_t __su_instances;
-
-int su_instances(void)
-{
-	return atomic_read(&__su_instances);
-}
-
-bool su_running(void)
-{
-	return su_instances() > 0;
-}
-
-bool su_visible(void)
-{
-	kuid_t uid = current_uid();
-	if (su_running())
-		return true;
-	if (uid_eq(uid, GLOBAL_ROOT_UID) || uid_eq(uid, GLOBAL_SYSTEM_UID))
-		return true;
-	return false;
-}
-
-void su_exec(void)
-{
-	atomic_inc(&__su_instances);
-}
-
-void su_exit(void)
-{
-	atomic_dec(&__su_instances);
-}
-
 DEFINE_MUTEX(sched_domains_mutex);
 DEFINE_PER_CPU_SHARED_ALIGNED(struct rq, runqueues);
 
@@ -1248,10 +1216,22 @@ void set_cpus_allowed_common(struct task_struct *p, const struct cpumask *new_ma
 	p->nr_cpus_allowed = cpumask_weight(new_mask);
 }
 
+static const struct cpumask *get_adjusted_cpumask(const struct task_struct *p,
+	const struct cpumask *req_mask)
+{
+	/* Force all performance-critical kthreads onto the big cluster */
+	if (p->flags & PF_PERF_CRITICAL)
+		return cpu_perf_mask;
+
+	return req_mask;
+}
+
 void do_set_cpus_allowed(struct task_struct *p, const struct cpumask *new_mask)
 {
 	struct rq *rq = task_rq(p);
 	bool queued, running;
+
+	new_mask = get_adjusted_cpumask(p, new_mask);
 
 	lockdep_assert_held(&p->pi_lock);
 
@@ -1293,6 +1273,8 @@ static int __set_cpus_allowed_ptr(struct task_struct *p,
 	struct rq *rq;
 	unsigned int dest_cpu;
 	int ret = 0;
+
+	new_mask = get_adjusted_cpumask(p, new_mask);
 
 	rq = task_rq_lock(p, &flags);
 
