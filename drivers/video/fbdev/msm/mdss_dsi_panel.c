@@ -1446,7 +1446,6 @@ static int mdss_dsi_panel_on(struct mdss_panel_data *pdata)
 	}
 */
 
-
 	 if (pinfo->compression_mode == COMPRESSION_DSC)
 		 mdss_dsi_panel_dsc_pps_send(ctrl, pinfo);
  
