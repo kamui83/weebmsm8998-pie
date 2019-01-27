@@ -418,7 +418,6 @@ static int drawobj_add_sync_fence(struct kgsl_device *device,
 		clear_bit(event->id, &syncobj->pending);
 
 		drawobj_put(drawobj);
-
 		/*
 		 * Print a syncpoint_fence_expire trace if
 		 * the fence is already signaled or there is
