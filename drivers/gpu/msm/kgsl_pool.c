@@ -280,6 +280,17 @@ static int kgsl_pool_idx_lookup(unsigned int order)
 	return -ENOMEM;
 }
 
+static int kgsl_pool_get_retry_order(unsigned int order)
+{
+	int i;
+
+	for (i = kgsl_num_pools-1; i > 0; i--)
+		if (order >= kgsl_pools[i].pool_order)
+			return kgsl_pools[i].pool_order;
+
+	return 0;
+}
+
 /**
  * kgsl_pool_alloc_page() - Allocate a page of requested size
  * @page_size: Size of the page to be allocated
@@ -326,7 +337,7 @@ int kgsl_pool_alloc_page(int *page_size, struct page **pages,
 	if (pool == NULL) {
 		/* Retry with lower order pages */
 		if (order > 0) {
-			size = PAGE_SIZE << --order;
+			size = PAGE_SIZE << kgsl_pool_get_retry_order(order);
 			goto eagain;
 		} else {
 			/*
@@ -411,6 +422,24 @@ void kgsl_pool_free_page(struct page *page)
 	__free_pages(page, page_order);
 }
 
+/*
+ * Return true if the pool of specified page size is supported
+ * or no pools are supported otherwise return false.
+ */
+bool kgsl_pool_avaialable(int page_size)
+{
+	int i;
+
+	if (!kgsl_num_pools)
+		return true;
+
+	for (i = 0; i < kgsl_num_pools; i++)
+		if (ilog2(page_size >> PAGE_SHIFT) == kgsl_pools[i].pool_order)
+			return true;
+
+	return false;
+}
+
 static void kgsl_pool_reserve_pages(void)
 {
 	int i, j;
@@ -438,16 +467,12 @@ kgsl_pool_shrink_scan_objects(struct shrinker *shrinker,
 	/* nr represents number of pages to be removed*/
 	int nr = sc->nr_to_scan;
 	int total_pages = kgsl_pool_size_total();
-	unsigned long ret;
 
 	/* Target pages represents new  pool size */
 	int target_pages = (nr > total_pages) ? 0 : (total_pages - nr);
 
 	/* Reduce pool size to target_pages */
-	ret = kgsl_pool_reduce(target_pages, false);
-
-	/* If we are unable to shrink more, stop trying */
-	return (ret == 0) ? SHRINK_STOP : ret;
+	return kgsl_pool_reduce(target_pages, false);
 }
 
 static unsigned long
