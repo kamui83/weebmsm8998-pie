@@ -757,7 +757,7 @@ bool sched_can_stop_tick(void)
 	if (current->policy == SCHED_RR) {
 		struct sched_rt_entity *rt_se = &current->rt;
 
-		return list_is_singular(&rt_se->run_list);
+		return rt_se->run_list.prev == rt_se->run_list.next;
 	}
 
 	/*
@@ -2119,8 +2119,7 @@ try_to_wake_up(struct task_struct *p, unsigned int state, int wake_flags,
 
 	ttwu_queue(p, cpu);
 stat:
-	if (schedstat_enabled())
-		ttwu_stat(p, cpu, wake_flags);
+	ttwu_stat(p, cpu, wake_flags);
 out:
 	raw_spin_unlock_irqrestore(&p->pi_lock, flags);
 
@@ -2177,8 +2176,7 @@ static void try_to_wake_up_local(struct task_struct *p)
 	}
 
 	ttwu_do_wakeup(rq, p, 0);
-	if (schedstat_enabled())
-		ttwu_stat(p, smp_processor_id(), 0);
+	ttwu_stat(p, smp_processor_id(), 0);
 out:
 	raw_spin_unlock(&p->pi_lock);
 }
@@ -2253,7 +2251,6 @@ static void __sched_fork(unsigned long clone_flags, struct task_struct *p)
 #endif
 
 #ifdef CONFIG_SCHEDSTATS
-	/* Even if schedstat is disabled, there should not be garbage */
 	memset(&p->se.statistics, 0, sizeof(p->se.statistics));
 #endif
 
@@ -2324,69 +2321,6 @@ int sysctl_numa_balancing(struct ctl_table *table, int write,
 		return err;
 	if (write)
 		set_numabalancing_state(state);
-	return err;
-}
-#endif
-#endif
-
-DEFINE_STATIC_KEY_FALSE(sched_schedstats);
-
-#ifdef CONFIG_SCHEDSTATS
-static void set_schedstats(bool enabled)
-{
-	if (enabled)
-		static_branch_enable(&sched_schedstats);
-	else
-		static_branch_disable(&sched_schedstats);
-}
-
-void force_schedstat_enabled(void)
-{
-	if (!schedstat_enabled()) {
-		pr_info("kernel profiling enabled schedstats, disable via kernel.sched_schedstats.\n");
-		static_branch_enable(&sched_schedstats);
-	}
-}
-
-static int __init setup_schedstats(char *str)
-{
-	int ret = 0;
-	if (!str)
-		goto out;
-
-	if (!strcmp(str, "enable")) {
-		set_schedstats(true);
-		ret = 1;
-	} else if (!strcmp(str, "disable")) {
-		set_schedstats(false);
-		ret = 1;
-	}
-out:
-	if (!ret)
-		pr_warn("Unable to parse schedstats=\n");
-
-	return ret;
-}
-__setup("schedstats=", setup_schedstats);
-
-#ifdef CONFIG_PROC_SYSCTL
-int sysctl_schedstats(struct ctl_table *table, int write,
-			 void __user *buffer, size_t *lenp, loff_t *ppos)
-{
-	struct ctl_table t;
-	int err;
-	int state = static_branch_likely(&sched_schedstats);
-
-	if (write && !capable(CAP_SYS_ADMIN))
-		return -EPERM;
-
-	t = *table;
-	t.data = &state;
-	err = proc_dointvec_minmax(&t, write, buffer, lenp, ppos);
-	if (err < 0)
-		return err;
-	if (write)
-		set_schedstats(state);
 	return err;
 }
 #endif
@@ -3473,7 +3407,7 @@ static void __sched notrace __schedule(bool preempt)
 			if (prev->flags & PF_WQ_WORKER) {
 				struct task_struct *to_wakeup;
 
-				to_wakeup = wq_worker_sleeping(prev);
+				to_wakeup = wq_worker_sleeping(prev, cpu);
 				if (to_wakeup)
 					try_to_wake_up_local(to_wakeup);
 			}
@@ -5238,14 +5172,21 @@ void sched_show_task(struct task_struct *p)
 	int ppid;
 	unsigned long state = p->state;
 
-	if (!try_get_task_stack(p))
-		return;
 	if (state)
 		state = __ffs(state) + 1;
 	printk(KERN_INFO "%-15.15s %c", p->comm,
 		state < sizeof(stat_nam) - 1 ? stat_nam[state] : '?');
+#if BITS_PER_LONG == 32
+	if (state == TASK_RUNNING)
+		printk(KERN_CONT " running  ");
+	else
+		printk(KERN_CONT " %08lx ", thread_saved_pc(p));
+#else
 	if (state == TASK_RUNNING)
 		printk(KERN_CONT "  running task    ");
+	else
+		printk(KERN_CONT " %016lx ", thread_saved_pc(p));
+#endif
 #ifdef CONFIG_DEBUG_STACK_USAGE
 	free = stack_not_used(p);
 #endif
@@ -5260,7 +5201,6 @@ void sched_show_task(struct task_struct *p)
 
 	print_worker_info(KERN_INFO, p);
 	show_stack(p, NULL);
-	put_task_stack(p);
 }
 
 void show_state_filter(unsigned long state_filter)
@@ -5522,15 +5462,13 @@ void idle_task_exit(void)
 /*
  * Since this CPU is going 'away' for a while, fold any nr_active delta
  * we might have. Assumes we're called after migrate_tasks() so that the
- * nr_active count is stable. We need to take the teardown thread which
- * is calling this into account, so we hand in adjust = 1 to the load
- * calculation.
+ * nr_active count is stable.
  *
  * Also see the comment "Global load-average calculations".
  */
 static void calc_load_migrate(struct rq *rq)
 {
-	long delta = calc_load_fold_active(rq, 1);
+	long delta = calc_load_fold_active(rq);
 	if (delta)
 		atomic_long_add(delta, &calc_load_tasks);
 }
@@ -5953,6 +5891,9 @@ migration_call(struct notifier_block *nfb, unsigned long action, void *hcpu)
 		migrate_tasks(rq);
 		BUG_ON(rq->nr_running != 1); /* the migration thread */
 		raw_spin_unlock_irqrestore(&rq->lock, flags);
+		break;
+
+	case CPU_DEAD:
 		calc_load_migrate(rq);
 		break;
 #endif
@@ -6310,10 +6251,10 @@ static int init_rootdomain(struct root_domain *rd)
 
 	init_dl_bw(&rd->dl_bw);
 	if (cpudl_init(&rd->cpudl) != 0)
-		goto free_rto_mask;
+		goto free_dlo_mask;
 
 	if (cpupri_init(&rd->cpupri) != 0)
-		goto free_cpudl;
+		goto free_rto_mask;
 
 	init_max_cpu_capacity(&rd->max_cpu_capacity);
 
@@ -6321,8 +6262,6 @@ static int init_rootdomain(struct root_domain *rd)
 
 	return 0;
 
-free_cpudl:
-	cpudl_cleanup(&rd->cpudl);
 free_rto_mask:
 	free_cpumask_var(rd->rto_mask);
 free_dlo_mask:
@@ -8329,8 +8268,6 @@ void sched_online_group(struct task_group *tg, struct task_group *parent)
 	INIT_LIST_HEAD(&tg->children);
 	list_add_rcu(&tg->siblings, &parent->children);
 	spin_unlock_irqrestore(&task_group_lock, flags);
-
-	online_fair_sched_group(tg);
 }
 
 /* rcu callback to free various structures associated with a task group */

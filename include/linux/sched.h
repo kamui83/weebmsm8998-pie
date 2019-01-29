@@ -964,10 +964,6 @@ static inline int sched_info_on(void)
 #endif
 }
 
-#ifdef CONFIG_SCHEDSTATS
-void force_schedstat_enabled(void);
-#endif
-
 enum cpu_idle_type {
 	CPU_IDLE,
 	CPU_NOT_IDLE,
@@ -1452,13 +1448,8 @@ struct sched_entity {
 #endif
 
 #ifdef CONFIG_SMP
-	/*
-	 * Per entity load average tracking.
-	 *
-	 * Put into separate cache line so it does not
-	 * collide with read-mostly values above.
-	 */
-	struct sched_avg	avg ____cacheline_aligned_in_smp;
+	/* Per entity load average tracking */
+	struct sched_avg	avg;
 #endif
 };
 
@@ -1746,14 +1737,11 @@ struct task_struct {
 #endif
 	struct prev_cputime prev_cputime;
 #ifdef CONFIG_VIRT_CPU_ACCOUNTING_GEN
-	seqcount_t vtime_seqcount;
+	seqlock_t vtime_seqlock;
 	unsigned long long vtime_snap;
 	enum {
-		/* Task is sleeping or running in a CPU with VTIME inactive */
-		VTIME_INACTIVE = 0,
-		/* Task runs in userspace in a CPU with VTIME active */
+		VTIME_SLEEPING = 0,
 		VTIME_USER,
-		/* Task runs in kernelspace in a CPU with VTIME active */
 		VTIME_SYS,
 	} vtime_snap_whence;
 #endif
@@ -2623,7 +2611,6 @@ extern void sched_autogroup_create_attach(struct task_struct *p);
 extern void sched_autogroup_detach(struct task_struct *p);
 extern void sched_autogroup_fork(struct signal_struct *sig);
 extern void sched_autogroup_exit(struct signal_struct *sig);
-extern void sched_autogroup_exit_task(struct task_struct *p);
 #ifdef CONFIG_PROC_FS
 extern void proc_sched_autogroup_show_task(struct task_struct *p, struct seq_file *m);
 extern int proc_sched_autogroup_set_nice(struct task_struct *p, int nice);
@@ -2633,7 +2620,6 @@ static inline void sched_autogroup_create_attach(struct task_struct *p) { }
 static inline void sched_autogroup_detach(struct task_struct *p) { }
 static inline void sched_autogroup_fork(struct signal_struct *sig) { }
 static inline void sched_autogroup_exit(struct signal_struct *sig) { }
-static inline void sched_autogroup_exit_task(struct task_struct *p) { }
 #endif
 
 extern int yield_to(struct task_struct *p, bool preempt);
