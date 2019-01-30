@@ -38,6 +38,16 @@ KBUILD_CFLAGS	+= $(call cc-option,-march=armv8-a+crypto+crc,) $(call cc-option,-
 
 ifeq ($(cc-name),clang)
 KBUILD_CFLAGS	+= $(call clang-ifversion, -ge, 0600, -mgeneral-regs-only, -mno-implicit-float)
+ifeq ($(CONFIG_POLLY_CLANG), y)
+KBUILD_CFLAGS	+= -mllvm -polly \
+			-mllvm -polly-run-dce \
+			-mllvm -polly-run-inliner \
+			-mllvm -polly-opt-fusion=max \
+			-mllvm -polly-ast-use-context \
+			-mllvm -polly-vectorizer=stripmine \
+			-mllvm -polly-detect-keep-going
+
+endif
 else
 KBUILD_CFLAGS	+= -mgeneral-regs-only
 endif
