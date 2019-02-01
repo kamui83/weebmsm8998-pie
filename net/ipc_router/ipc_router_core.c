@@ -4132,8 +4132,8 @@ static int msm_ipc_router_add_xprt(struct msm_ipc_router_xprt *xprt)
 	if (xprt->get_ws_info)
 		xprt_info->dynamic_ws = xprt->get_ws_info(xprt);
 
-	init_kthread_work(&xprt_info->read_data, do_read_data);
-	init_kthread_worker(&xprt_info->kworker);
+	kthread_init_work(&xprt_info->read_data, do_read_data);
+	kthread_init_worker(&xprt_info->kworker);
 	xprt_info->task = kthread_run(kthread_worker_fn,
 				      &xprt_info->kworker,
 				      "%s", xprt->name);
@@ -4183,7 +4183,7 @@ static void msm_ipc_router_remove_xprt(struct msm_ipc_router_xprt *xprt)
 		mutex_lock(&xprt_info->rx_lock_lhb2);
 		xprt_info->abort_data_read = 1;
 		mutex_unlock(&xprt_info->rx_lock_lhb2);
-		flush_kthread_worker(&xprt_info->kworker);
+		kthread_flush_worker(&xprt_info->kworker);
 		kthread_stop(xprt_info->task);
 		xprt_info->task = NULL;
 		mutex_lock(&xprt_info->rx_lock_lhb2);
@@ -4331,7 +4331,7 @@ void msm_ipc_router_xprt_notify(struct msm_ipc_router_xprt *xprt,
 		}
 	}
 	mutex_unlock(&xprt_info->rx_lock_lhb2);
-	queue_kthread_work(&xprt_info->kworker, &xprt_info->read_data);
+	kthread_queue_work(&xprt_info->kworker, &xprt_info->read_data);
 }
 
 /**
