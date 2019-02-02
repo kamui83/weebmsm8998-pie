@@ -2902,6 +2902,12 @@ static int mmc_reset(struct mmc_host *host)
 	struct mmc_card *card = host->card;
 	int ret;
 
+	/*
+	 * In the case of recovery, we can't expect flushing the cache to work
+	 * always, but we have a go and ignore errors.
+	 */
+	mmc_flush_cache(host->card);
+
 	if ((host->caps & MMC_CAP_HW_RESET) && host->ops->hw_reset &&
 	     mmc_can_reset(card)) {
 		/* If the card accept RST_n signal, send it. */
@@ -2983,7 +2989,7 @@ static int mmc_pre_hibernate(struct mmc_host *host)
 	host->caps2 &= ~MMC_CAP2_CLK_SCALE;
 	host->clk_scaling.state = MMC_LOAD_HIGH;
 	ret = mmc_clk_update_freq(host, host->card->clk_scaling_highest,
-				host->clk_scaling.state);
+				host->clk_scaling.state, 0);
 	if (ret)
 		pr_err("%s: %s: Setting clk frequency to max failed: %d\n",
 				mmc_hostname(host), __func__, ret);
