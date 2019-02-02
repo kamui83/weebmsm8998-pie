@@ -44,7 +44,7 @@ struct pr_ops;
  * Maximum number of blkcg policies allowed to be registered concurrently.
  * Defined here to simplify include dependency.
  */
-#define BLKCG_MAX_POLS		2
+#define BLKCG_MAX_POLS		3
 
 struct request;
 typedef void (rq_end_io_fn)(struct request *, int);
@@ -201,6 +201,13 @@ struct request {
 	ktime_t			lat_hist_io_start;
 	int			lat_hist_enabled;
 };
+
+#define req_op(req)		(op_from_rq_bits((req)->cmd_flags))
+#define req_set_op(req, op)	((req)->cmd_flags |= op)
+#define req_set_op_attrs(req, op, flags) do {	\
+	req_set_op(req, op);			\
+	(req)->cmd_flags |= flags;		\
+} while (0)
 
 static inline unsigned short req_get_ioprio(struct request *req)
 {
@@ -599,7 +606,8 @@ static inline void queue_flag_clear(unsigned int flag, struct request_queue *q)
 
 #define list_entry_rq(ptr)	list_entry((ptr), struct request, queuelist)
 
-#define rq_data_dir(rq)		((int)((rq)->cmd_flags & 1))
+#define rq_data_dir(rq) \
+	(op_is_write(op_from_rq_bits(rq->cmd_flags)) ? WRITE : READ)
 
 /*
  * Driver can handle struct request, if it either has an old style
