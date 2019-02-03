@@ -39,7 +39,6 @@
 #include <linux/ioprio.h>
 
 #include <trace/events/mmc.h>
-#include <linux/idr.h>
 
 #include <linux/mmc/ioctl.h>
 #include <linux/mmc/card.h>
@@ -102,14 +101,15 @@ static int perdev_minors = CONFIG_MMC_BLOCK_MINORS;
 /*
  * We've only got one major, so number of mmcblk devices is
  * limited to (1 << 20) / number of minors per device.  It is also
- * limited by the MAX_DEVICES below.
+ * currently limited by the size of the static bitmaps below.
  */
 static int max_devices;
 
 #define MAX_DEVICES 256
 
-static DEFINE_IDA(mmc_blk_ida);
-static DEFINE_SPINLOCK(mmc_blk_lock);
+/* TODO: Replace these with struct ida */
+static DECLARE_BITMAP(dev_use, MAX_DEVICES);
+static DECLARE_BITMAP(name_use, MAX_DEVICES);
 
 /*
  * There is one mmc_blk_data per slot.
@@ -129,6 +129,7 @@ struct mmc_blk_data {
 	unsigned int	usage;
 	unsigned int	read_only;
 	unsigned int	part_type;
+	unsigned int	name_idx;
 	unsigned int	reset_done;
 #define MMC_BLK_READ		BIT(0)
 #define MMC_BLK_WRITE		BIT(1)
@@ -171,6 +172,8 @@ static inline void mmc_blk_clear_packed(struct mmc_queue_req *mqrq)
 {
 	struct mmc_packed *packed = mqrq->packed;
 
+	BUG_ON(!packed);
+
 	mqrq->cmd_type = MMC_PACKED_NONE;
 	packed->nr_entries = MMC_PACKED_NR_ZERO;
 	packed->idx_failure = MMC_PACKED_NR_IDX;
@@ -207,9 +210,7 @@ static void mmc_blk_put(struct mmc_blk_data *md)
 		int devidx = mmc_get_devidx(md->disk);
 		blk_cleanup_queue(md->queue.queue);
 
-		spin_lock(&mmc_blk_lock);
-		ida_remove(&mmc_blk_ida, devidx);
-		spin_unlock(&mmc_blk_lock);
+		__clear_bit(devidx, dev_use);
 
 		put_disk(md->disk);
 		kfree(md);
@@ -735,7 +736,7 @@ static struct mmc_blk_ioc_data *mmc_blk_ioctl_copy_from_user(
 	struct mmc_blk_ioc_data *idata;
 	int err;
 
-	idata = kmalloc(sizeof(*idata), GFP_KERNEL);
+	idata = kzalloc(sizeof(*idata), GFP_KERNEL);
 	if (!idata) {
 		err = -ENOMEM;
 		goto out;
@@ -752,12 +753,10 @@ static struct mmc_blk_ioc_data *mmc_blk_ioctl_copy_from_user(
 		goto idata_err;
 	}
 
-	if (!idata->buf_bytes) {
-		idata->buf = NULL;
+	if (!idata->buf_bytes)
 		return idata;
-	}
 
-	idata->buf = kmalloc(idata->buf_bytes, GFP_KERNEL);
+	idata->buf = kzalloc(idata->buf_bytes, GFP_KERNEL);
 	if (!idata->buf) {
 		err = -ENOMEM;
 		goto idata_err;
@@ -1222,7 +1221,7 @@ static int mmc_blk_ioctl_cmd(struct block_device *bdev,
 	mmc_get_card(card);
 
 	if (mmc_card_cmdq(card)) {
-		err = mmc_cmdq_halt_on_empty_queue(card->host, 0);
+		err = mmc_cmdq_halt_on_empty_queue(card->host);
 		if (err) {
 			pr_err("%s: halt failed while doing %s err (%d)\n",
 					mmc_hostname(card->host),
@@ -2296,8 +2295,8 @@ static int mmc_blk_err_check(struct mmc_card *card,
 
 	if (brq->data.error) {
 		if (need_retune && !brq->retune_retry_done) {
-			pr_debug("%s: retrying because a re-tune was needed\n",
-				 req->rq_disk->disk_name);
+			pr_info("%s: retrying because a re-tune was needed\n",
+				req->rq_disk->disk_name);
 			brq->retune_retry_done = 1;
 			return MMC_BLK_RETRY;
 		}
@@ -2341,6 +2340,8 @@ static int mmc_blk_packed_err_check(struct mmc_card *card,
 	struct mmc_packed *packed = mq_rq->packed;
 	int err, check, status;
 	u8 *ext_csd;
+
+	BUG_ON(!packed);
 
 	packed->retries--;
 	check = mmc_blk_err_check(card, areq);
@@ -2745,18 +2746,6 @@ static u8 mmc_blk_prep_packed_list(struct mmc_queue *mq, struct request *req)
 	u8 reqs = 0;
 	struct mmc_wr_pack_stats *stats = &card->wr_pack_stats;
 
-	/*
-	 * We don't need to check packed for any further
-	 * operation of packed stuff as we set MMC_PACKED_NONE
-	 * and return zero for reqs if geting null packed. Also
-	 * we clean the flag of MMC_BLK_PACKED_CMD to avoid doing
-	 * it again when removing blk req.
-	 */
-	if (!mqrq->packed) {
-		md->flags &= (~MMC_BLK_PACKED_CMD);
-		goto no_packed;
-	}
-
 	if (!(md->flags & MMC_BLK_PACKED_CMD))
 		goto no_packed;
 
@@ -2911,6 +2900,8 @@ static void mmc_blk_packed_hdr_wrq_prep(struct mmc_queue_req *mqrq,
 	u8 hdr_blocks;
 	u8 i = 1;
 
+	BUG_ON(!packed);
+
 	mqrq->cmd_type = MMC_PACKED_WRITE;
 	packed->blocks = 0;
 	packed->idx_failure = MMC_PACKED_NR_IDX;
@@ -3028,6 +3019,8 @@ static int mmc_blk_end_packed_req(struct mmc_queue_req *mq_rq)
 	int idx = packed->idx_failure, i = 0;
 	int ret = 0;
 
+	BUG_ON(!packed);
+
 	while (!list_empty(&packed->list)) {
 		prq = list_entry_rq(packed->list.next);
 		if (idx == i) {
@@ -3056,6 +3049,8 @@ static void mmc_blk_abort_packed_req(struct mmc_queue_req *mq_rq)
 	struct request *prq;
 	struct mmc_packed *packed = mq_rq->packed;
 
+	BUG_ON(!packed);
+
 	while (!list_empty(&packed->list)) {
 		prq = list_entry_rq(packed->list.next);
 		list_del_init(&prq->queuelist);
@@ -3071,6 +3066,8 @@ static void mmc_blk_revert_packed_req(struct mmc_queue *mq,
 	struct request *prq;
 	struct request_queue *q = mq->queue;
 	struct mmc_packed *packed = mq_rq->packed;
+
+	BUG_ON(!packed);
 
 	while (!list_empty(&packed->list)) {
 		prq = list_entry_rq(packed->list.prev);
@@ -3218,14 +3215,8 @@ static int mmc_blk_cmdq_issue_rw_rq(struct mmc_queue *mq, struct request *req)
 	struct mmc_cmdq_req *mc_rq;
 	u8 active_small_sector_read = 0;
 	int ret = 0;
-	unsigned long timeout_ms = 10000; /* 10 sec safe timeout */
 
-	mmc_cmdq_up_rwsem(host);
-	mmc_deferred_scaling(host, timeout_ms);
-	ret = mmc_cmdq_down_rwsem(host, req);
-	if (ret)
-		return ret;
-
+	mmc_deferred_scaling(host);
 	mmc_cmdq_clk_scaling_start_busy(host, true);
 
 	BUG_ON((req->tag < 0) || (req->tag > card->ext_csd.cmdq_depth));
@@ -3258,18 +3249,9 @@ static int mmc_blk_cmdq_issue_rw_rq(struct mmc_queue *mq, struct request *req)
 	 * empty faster and we will be able to scale up to Nominal frequency
 	 * when needed.
 	 */
-
-	if (!ret && (host->clk_scaling.state == MMC_LOAD_LOW)) {
-
-		ret = wait_event_interruptible_timeout(ctx->queue_empty_wq,
-				(!ctx->active_reqs &&
-				 !test_bit(CMDQ_STATE_ERR, &ctx->curr_state)),
-				msecs_to_jiffies(5000));
-		if (!ret)
-			pr_err("%s: queue_empty_wq timeout case? ret = (%d)\n",
-				__func__, ret);
-		ret = 0;
-	}
+	if (!ret && (host->clk_scaling.state == MMC_LOAD_LOW))
+		wait_event_interruptible(ctx->queue_empty_wq,
+					(!ctx->active_reqs));
 
 	if (ret) {
 		/* clear pending request */
@@ -3557,7 +3539,6 @@ static void mmc_blk_cmdq_err(struct mmc_queue *mq)
 	if (WARN_ON(!mrq))
 		return;
 
-	down_write(&ctx_info->err_rwsem);
 	q = mrq->req->q;
 	err = mmc_cmdq_halt(host, true);
 	if (err) {
@@ -3610,24 +3591,6 @@ reset:
 	host->err_mrq = NULL;
 	clear_bit(CMDQ_STATE_REQ_TIMED_OUT, &ctx_info->curr_state);
 	WARN_ON(!test_and_clear_bit(CMDQ_STATE_ERR, &ctx_info->curr_state));
-
-#ifdef CONFIG_MMC_CLKGATE
-	pr_err("%s: clk-rqs(%d), claim-cnt(%d), claimed(%d), claimer(%s)\n",
-		__func__, host->clk_requests, host->claim_cnt, host->claimed,
-		host->claimer->comm);
-#else
-	pr_err("%s: claim-cnt(%d), claimed(%d), claimer(%s)\n", __func__,
-			host->claim_cnt, host->claimed, host->claimer->comm);
-#endif
-	sched_show_task(mq->thread);
-	if (host->claimed && host->claimer)
-		sched_show_task(host->claimer);
-#ifdef CONFIG_MMC_CLKGATE
-	WARN_ON(host->clk_requests < 0);
-#endif
-	WARN_ON(host->claim_cnt < 0);
-
-	up_write(&ctx_info->err_rwsem);
 	wake_up(&ctx_info->wait);
 }
 
@@ -3642,16 +3605,6 @@ void mmc_blk_cmdq_complete_rq(struct request *rq)
 	struct mmc_queue *mq = (struct mmc_queue *)rq->q->queuedata;
 	int err = 0;
 	bool is_dcmd = false;
-	bool err_rwsem = false;
-
-	if (down_read_trylock(&ctx_info->err_rwsem)) {
-		err_rwsem = true;
-	} else {
-		pr_err("%s: err_rwsem lock failed to acquire => err handler active\n",
-		    __func__);
-		WARN_ON_ONCE(!test_bit(CMDQ_STATE_ERR, &ctx_info->curr_state));
-		goto out;
-	}
 
 	if (mrq->cmd && mrq->cmd->error)
 		err = mrq->cmd->error;
@@ -3673,6 +3626,12 @@ void mmc_blk_cmdq_complete_rq(struct request *rq)
 		}
 		goto out;
 	}
+	/*
+	 * In case of error CMDQ is expected to be either in halted
+	 * or disable state so cannot receive any completion of
+	 * other requests.
+	 */
+	WARN_ON(test_bit(CMDQ_STATE_ERR, &ctx_info->curr_state));
 
 	/* clear pending request */
 	BUG_ON(!test_and_clear_bit(cmdq_req->tag,
@@ -3706,7 +3665,7 @@ void mmc_blk_cmdq_complete_rq(struct request *rq)
 out:
 
 	mmc_cmdq_clk_scaling_stop_busy(host, true, is_dcmd);
-	if (err_rwsem && !(err || cmdq_req->resp_err)) {
+	if (!(err || cmdq_req->resp_err)) {
 		mmc_host_clk_release(host);
 		wake_up(&ctx_info->wait);
 		mmc_put_card(host->card);
@@ -3718,8 +3677,6 @@ out:
 	if (blk_queue_stopped(mq->queue) && !ctx_info->active_reqs)
 		complete(&mq->cmdq_shutdown_complete);
 
-	if (err_rwsem)
-		up_read(&ctx_info->err_rwsem);
 	return;
 }
 
@@ -3764,8 +3721,8 @@ static int mmc_blk_issue_rw_rq(struct mmc_queue *mq, struct request *rqc)
 			 * When 4KB native sector is enabled, only 8 blocks
 			 * multiple read or write is allowed
 			 */
-			if (mmc_large_sector(card) &&
-				!IS_ALIGNED(blk_rq_sectors(rqc), 8)) {
+			if ((brq->data.blocks & 0x07) &&
+			    (card->ext_csd.data_sector_size == 4096)) {
 				pr_err("%s: Transfer size is not 4KB sector size aligned\n",
 					req->rq_disk->disk_name);
 				mq_rq = mq->mqrq_cur;
@@ -4101,7 +4058,6 @@ static int mmc_blk_cmdq_issue_rq(struct mmc_queue *mq, struct request *req)
 		if ((cmd_flags & (REQ_FLUSH | REQ_DISCARD)) &&
 		    (card->quirks & MMC_QUIRK_CMDQ_EMPTY_BEFORE_DCMD) &&
 		    ctx->active_small_sector_read_reqs) {
-			mmc_cmdq_up_rwsem(host);
 			ret = wait_event_interruptible(ctx->queue_empty_wq,
 						      !ctx->active_reqs);
 			if (ret) {
@@ -4110,10 +4066,6 @@ static int mmc_blk_cmdq_issue_rq(struct mmc_queue *mq, struct request *req)
 					__func__, ret);
 				BUG_ON(1);
 			}
-			ret = mmc_cmdq_down_rwsem(host, req);
-			if (ret)
-				return ret;
-
 			/* clear the counter now */
 			ctx->active_small_sector_read_reqs = 0;
 			/*
@@ -4163,7 +4115,7 @@ out:
 	return ret;
 }
 
-int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
+static int mmc_blk_issue_rq(struct mmc_queue *mq, struct request *req)
 {
 	int ret;
 	struct mmc_blk_data *md = mq->data;
@@ -4258,29 +4210,29 @@ static struct mmc_blk_data *mmc_blk_alloc_req(struct mmc_card *card,
 	struct mmc_blk_data *md;
 	int devidx, ret;
 
-again:
-	if (!ida_pre_get(&mmc_blk_ida, GFP_KERNEL))
-		return ERR_PTR(-ENOMEM);
-
-	spin_lock(&mmc_blk_lock);
-	ret = ida_get_new(&mmc_blk_ida, &devidx);
-	spin_unlock(&mmc_blk_lock);
-
-	if (ret == -EAGAIN)
-		goto again;
-	else if (ret)
-		return ERR_PTR(ret);
-
-	if (devidx >= max_devices) {
-		ret = -ENOSPC;
-		goto out;
-	}
+	devidx = find_first_zero_bit(dev_use, max_devices);
+	if (devidx >= max_devices)
+		return ERR_PTR(-ENOSPC);
+	__set_bit(devidx, dev_use);
 
 	md = kzalloc(sizeof(struct mmc_blk_data), GFP_KERNEL);
 	if (!md) {
 		ret = -ENOMEM;
 		goto out;
 	}
+
+	/*
+	 * !subname implies we are creating main mmc_blk_data that will be
+	 * associated with mmc_card with dev_set_drvdata. Due to device
+	 * partitions, devidx will not coincide with a per-physical card
+	 * index anymore so we keep track of a name index.
+	 */
+	if (!subname) {
+		md->name_idx = find_first_zero_bit(name_use, max_devices);
+		__set_bit(md->name_idx, name_use);
+	} else
+		md->name_idx = ((struct mmc_blk_data *)
+				dev_to_disk(parent)->private_data)->name_idx;
 
 	md->area_type = area_type;
 
@@ -4304,6 +4256,7 @@ again:
 	if (ret)
 		goto err_putdisk;
 
+	md->queue.issue_fn = mmc_blk_issue_rq;
 	md->queue.data = md;
 
 	md->disk->major	= MMC_BLOCK_MAJOR;
@@ -4330,7 +4283,7 @@ again:
 	 */
 
 	snprintf(md->disk->disk_name, sizeof(md->disk->disk_name),
-		 "mmcblk%u%s", card->host->index, subname ? subname : "");
+		 "mmcblk%u%s", md->name_idx, subname ? subname : "");
 
 	if (mmc_card_mmc(card))
 		blk_queue_logical_block_size(md->queue.queue,
@@ -4378,11 +4331,11 @@ again:
  err_putdisk:
 	put_disk(md->disk);
  err_kfree:
+	if (!subname)
+		__clear_bit(md->name_idx, name_use);
 	kfree(md);
  out:
-	spin_lock(&mmc_blk_lock);
-	ida_remove(&mmc_blk_ida, devidx);
-	spin_unlock(&mmc_blk_lock);
+	__clear_bit(devidx, dev_use);
 	return ERR_PTR(ret);
 }
 
@@ -4509,6 +4462,7 @@ static void mmc_blk_remove_parts(struct mmc_card *card,
 	struct list_head *pos, *q;
 	struct mmc_blk_data *part_md;
 
+	__clear_bit(md->name_idx, name_use);
 	list_for_each_safe(pos, q, &md->part) {
 		part_md = list_entry(pos, struct mmc_blk_data, part);
 		list_del(pos);

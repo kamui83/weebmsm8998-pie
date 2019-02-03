@@ -66,9 +66,7 @@ EXPORT_TRACEPOINT_SYMBOL_GPL(mmc_blk_rw_end);
  */
 #define MMC_BKOPS_MAX_TIMEOUT	(4 * 60 * 1000) /* max time to wait in ms */
 
-/* The max erase timeout, used when host->max_busy_timeout isn't specified */
-#define MMC_ERASE_TIMEOUT_MS	(60 * 1000) /* 60 s */
-
+static struct workqueue_struct *workqueue;
 static const unsigned freqs[] = { 400000, 300000, 200000, 100000 };
 
 /*
@@ -76,19 +74,24 @@ static const unsigned freqs[] = { 400000, 300000, 200000, 100000 };
  * performance cost, and for other reasons may not always be desired.
  * So we allow it it to be disabled.
  */
-bool use_spi_crc = 0;
+bool use_spi_crc = 1;
 module_param(use_spi_crc, bool, 0);
 
+/*
+ * Internal function. Schedule delayed work in the MMC work queue.
+ */
 static int mmc_schedule_delayed_work(struct delayed_work *work,
 				     unsigned long delay)
 {
-	/*
-	 * We use the system_freezable_wq, because of two reasons.
-	 * First, it allows several works (not the same work item) to be
-	 * executed simultaneously. Second, the queue becomes frozen when
-	 * userspace becomes frozen during system PM.
-	 */
-	return queue_delayed_work(system_freezable_wq, work, delay);
+	return queue_delayed_work(workqueue, work, delay);
+}
+
+/*
+ * Internal function. Flush all scheduled work from the MMC work queue.
+ */
+static void mmc_flush_scheduled_work(void)
+{
+	flush_workqueue(workqueue);
 }
 
 #ifdef CONFIG_FAIL_MMC_REQUEST
@@ -141,34 +144,6 @@ static bool mmc_is_data_request(struct mmc_request *mmc_request)
 		return false;
 	}
 }
-
-void mmc_cmdq_up_rwsem(struct mmc_host *host)
-{
-	struct mmc_cmdq_context_info *ctx = &host->cmdq_ctx;
-
-	up_read(&ctx->err_rwsem);
-}
-EXPORT_SYMBOL(mmc_cmdq_up_rwsem);
-
-int mmc_cmdq_down_rwsem(struct mmc_host *host, struct request *rq)
-{
-	struct mmc_cmdq_context_info *ctx = &host->cmdq_ctx;
-
-	down_read(&ctx->err_rwsem);
-	/*
-	 * This is to prevent a case where issue context has already
-	 * called blk_queue_start_tag(), immediately after which error
-	 * handler work has run and called blk_queue_invalidate_tags().
-	 * In this case, the issue context should check for REQ_QUEUED
-	 * before proceeding with that request. It should ideally call
-	 * blk_queue_start_tag() again on the requeued request.
-	 */
-	if (!(rq->cmd_flags & REQ_QUEUED))
-		return -EINVAL;
-	else
-		return 0;
-}
-EXPORT_SYMBOL(mmc_cmdq_down_rwsem);
 
 static void mmc_clk_scaling_start_busy(struct mmc_host *host, bool lock_needed)
 {
@@ -378,23 +353,12 @@ static bool mmc_is_valid_state_for_clk_scaling(struct mmc_host *host)
 	return R1_CURRENT_STATE(status) == R1_STATE_TRAN;
 }
 
-int mmc_cmdq_halt_on_empty_queue(struct mmc_host *host, unsigned long timeout)
+int mmc_cmdq_halt_on_empty_queue(struct mmc_host *host)
 {
 	int err = 0;
 
-	if (!timeout) {
-		err = wait_event_interruptible(host->cmdq_ctx.queue_empty_wq,
-					(!host->cmdq_ctx.active_reqs));
-	} else {
-		err = wait_event_interruptible_timeout(
-				host->cmdq_ctx.queue_empty_wq,
-				(!host->cmdq_ctx.active_reqs),
-				msecs_to_jiffies(timeout));
-		if (!err)
-			pr_err("%s: halt_on_empty_queue timeout case: err(%d)\n",
-					__func__, err);
-	}
-
+	err = wait_event_interruptible(host->cmdq_ctx.queue_empty_wq,
+				(!host->cmdq_ctx.active_reqs));
 	if (host->cmdq_ctx.active_reqs) {
 		pr_err("%s: %s: unexpected active requests (%lu)\n",
 			mmc_hostname(host), __func__,
@@ -415,8 +379,7 @@ out:
 EXPORT_SYMBOL(mmc_cmdq_halt_on_empty_queue);
 
 int mmc_clk_update_freq(struct mmc_host *host,
-		unsigned long freq, enum mmc_load state,
-		unsigned long timeout)
+		unsigned long freq, enum mmc_load state)
 {
 	int err = 0;
 	bool cmdq_mode;
@@ -458,7 +421,7 @@ int mmc_clk_update_freq(struct mmc_host *host,
 	}
 
 	if (cmdq_mode) {
-		err = mmc_cmdq_halt_on_empty_queue(host, timeout);
+		err = mmc_cmdq_halt_on_empty_queue(host);
 		if (err) {
 			pr_err("%s: %s: failed halting queue (%d)\n",
 				mmc_hostname(host), __func__, err);
@@ -587,7 +550,7 @@ static int mmc_devfreq_set_target(struct device *dev,
 	clk_scaling->need_freq_change = false;
 
 	mmc_host_clk_hold(host);
-	err = mmc_clk_update_freq(host, *freq, clk_scaling->state, 0);
+	err = mmc_clk_update_freq(host, *freq, clk_scaling->state);
 	if (err && err != -EAGAIN) {
 		pr_err("%s: clock scale to %lu failed with error %d\n",
 			mmc_hostname(host), *freq, err);
@@ -613,7 +576,7 @@ out:
  * This function does clock scaling in case "need_freq_change" flag was set
  * by the clock scaling logic.
  */
-void mmc_deferred_scaling(struct mmc_host *host, unsigned long timeout)
+void mmc_deferred_scaling(struct mmc_host *host)
 {
 	unsigned long target_freq;
 	int err;
@@ -643,7 +606,7 @@ void mmc_deferred_scaling(struct mmc_host *host, unsigned long timeout)
 				target_freq, current->comm);
 
 	err = mmc_clk_update_freq(host, target_freq,
-		host->clk_scaling.state, timeout);
+		host->clk_scaling.state);
 	if (err && err != -EAGAIN) {
 		pr_err("%s: failed on deferred scale clocks (%d)\n",
 			mmc_hostname(host), err);
@@ -1198,7 +1161,7 @@ static int mmc_start_request(struct mmc_host *host, struct mmc_request *mrq)
 	led_trigger_event(host->led, LED_FULL);
 
 	if (mmc_is_data_request(mrq)) {
-		mmc_deferred_scaling(host, 0);
+		mmc_deferred_scaling(host);
 		mmc_clk_scaling_start_busy(host, true);
 	}
 
@@ -1799,10 +1762,8 @@ int mmc_cmdq_wait_for_dcmd(struct mmc_host *host,
 	if (err)
 		return err;
 
-	mmc_cmdq_up_rwsem(host);
 	wait_for_completion_io(&mrq->completion);
-	err = mmc_cmdq_down_rwsem(host, mrq->req);
-	if (err || cmd->error) {
+	if (cmd->error) {
 		pr_err("%s: DCMD %d failed with err %d\n",
 				mmc_hostname(host), cmd->opcode,
 				cmd->error);
@@ -2662,9 +2623,8 @@ EXPORT_SYMBOL(mmc_vddrange_to_ocrmask);
  * @np: The device node need to be parsed.
  * @mask: mask of voltages available for MMC/SD/SDIO
  *
- * Parse the "voltage-ranges" DT property, returning zero if it is not
- * found, negative errno if the voltage-range specification is invalid,
- * or one if the voltage-range is specified and successfully parsed.
+ * 1. Return zero on success.
+ * 2. Return negative errno: voltage-range is invalid.
  */
 int mmc_of_parse_voltage(struct device_node *np, u32 *mask)
 {
@@ -2673,12 +2633,8 @@ int mmc_of_parse_voltage(struct device_node *np, u32 *mask)
 
 	voltage_ranges = of_get_property(np, "voltage-ranges", &num_ranges);
 	num_ranges = num_ranges / sizeof(*voltage_ranges) / 2;
-	if (!voltage_ranges) {
-		pr_debug("%s: voltage-ranges unspecified\n", np->full_name);
-		return 0;
-	}
-	if (!num_ranges) {
-		pr_err("%s: voltage-ranges empty\n", np->full_name);
+	if (!voltage_ranges || !num_ranges) {
+		pr_info("%s: voltage-ranges unspecified\n", np->full_name);
 		return -EINVAL;
 	}
 
@@ -2697,7 +2653,7 @@ int mmc_of_parse_voltage(struct device_node *np, u32 *mask)
 		*mask |= ocr_mask;
 	}
 
-	return 1;
+	return 0;
 }
 EXPORT_SYMBOL(mmc_of_parse_voltage);
 
@@ -2942,7 +2898,7 @@ int mmc_regulator_get_supply(struct mmc_host *mmc)
 	if (IS_ERR(mmc->supply.vmmc)) {
 		if (PTR_ERR(mmc->supply.vmmc) == -EPROBE_DEFER)
 			return -EPROBE_DEFER;
-		dev_dbg(dev, "No vmmc regulator found\n");
+		dev_info(dev, "No vmmc regulator found\n");
 	} else {
 		ret = mmc_regulator_get_ocrmask(mmc->supply.vmmc);
 		if (ret > 0)
@@ -2954,7 +2910,7 @@ int mmc_regulator_get_supply(struct mmc_host *mmc)
 	if (IS_ERR(mmc->supply.vqmmc)) {
 		if (PTR_ERR(mmc->supply.vqmmc) == -EPROBE_DEFER)
 			return -EPROBE_DEFER;
-		dev_dbg(dev, "No vqmmc regulator found\n");
+		dev_info(dev, "No vqmmc regulator found\n");
 	}
 
 	return 0;
@@ -3473,15 +3429,17 @@ void mmc_init_erase(struct mmc_card *card)
 	 * to that size and alignment.
 	 *
 	 * For SD cards that define Allocation Unit size, limit erases to one
-	 * Allocation Unit at a time.
-	 * For MMC, have a stab at ai good value and for modern cards it will
-	 * end up being 4MiB. Note that if the value is too small, it can end
-	 * up taking longer to erase. Also note, erase_size is already set to
-	 * High Capacity Erase Size if available when this function is called.
+	 * Allocation Unit at a time.  For MMC cards that define High Capacity
+	 * Erase Size, whether it is switched on or not, limit to that size.
+	 * Otherwise just have a stab at a good value.  For modern cards it
+	 * will end up being 4MiB.  Note that if the value is too small, it
+	 * can end up taking longer to erase.
 	 */
 	if (mmc_card_sd(card) && card->ssr.au) {
 		card->pref_erase = card->ssr.au;
 		card->erase_shift = ffs(card->ssr.au) - 1;
+	} else if (card->ext_csd.hc_erase_size) {
+		card->pref_erase = card->ext_csd.hc_erase_size;
 	} else if (card->erase_size) {
 		sz = (card->csd.capacity << (card->csd.read_blkbits - 9)) >> 11;
 		if (sz < 128)
@@ -3729,8 +3687,7 @@ static int mmc_do_erase(struct mmc_card *card, unsigned int from,
 			unsigned int to, unsigned int arg)
 {
 	struct mmc_command cmd = {0};
-	unsigned int qty = 0, busy_timeout = 0;
-	bool use_r1b_resp = false;
+	unsigned int qty = 0;
 	unsigned long timeout;
 	unsigned int fr, nr;
 	int err;
@@ -3779,22 +3736,8 @@ static int mmc_do_erase(struct mmc_card *card, unsigned int from,
 	memset(&cmd, 0, sizeof(struct mmc_command));
 	cmd.opcode = MMC_ERASE;
 	cmd.arg = arg;
-	busy_timeout = mmc_erase_timeout(card, arg, qty);
-	/*
-	 * If the host controller supports busy signalling and the timeout for
-	 * the erase operation does not exceed the max_busy_timeout, we should
-	 * use R1B response. Or we need to prevent the host from doing hw busy
-	 * detection, which is done by converting to a R1 response instead.
-	 */
-	if (card->host->max_busy_timeout &&
-	    busy_timeout > card->host->max_busy_timeout) {
-		cmd.flags = MMC_RSP_SPI_R1 | MMC_RSP_R1 | MMC_CMD_AC;
-	} else {
-		cmd.flags = MMC_RSP_SPI_R1B | MMC_RSP_R1B | MMC_CMD_AC;
-		cmd.busy_timeout = busy_timeout;
-		use_r1b_resp = true;
-	}
-
+	cmd.flags = MMC_RSP_SPI_R1B | MMC_RSP_R1B | MMC_CMD_AC;
+	cmd.busy_timeout = mmc_erase_timeout(card, arg, qty);
 	err = mmc_wait_for_cmd(card->host, &cmd, 0);
 	if (err) {
 		pr_err("mmc_erase: erase error %d, status %#x\n",
@@ -3806,14 +3749,7 @@ static int mmc_do_erase(struct mmc_card *card, unsigned int from,
 	if (mmc_host_is_spi(card->host))
 		goto out;
 
-	/*
-	 * In case of when R1B + MMC_CAP_WAIT_WHILE_BUSY is used, the polling
-	 * shall be avoided.
-	 */
-	if ((card->host->caps & MMC_CAP_WAIT_WHILE_BUSY) && use_r1b_resp)
-		goto out;
-
-	timeout = jiffies + msecs_to_jiffies(busy_timeout);
+	timeout = jiffies + msecs_to_jiffies(MMC_CORE_TIMEOUT_MS);
 	do {
 		memset(&cmd, 0, sizeof(struct mmc_command));
 		cmd.opcode = MMC_SEND_STATUS;
@@ -3844,54 +3780,6 @@ out:
 	mmc_retune_release(card->host);
 	trace_mmc_blk_erase_end(arg, fr, nr);
 	return err;
-}
-
-static unsigned int mmc_align_erase_size(struct mmc_card *card,
-					 unsigned int *from,
-					 unsigned int *to,
-					 unsigned int nr)
-{
-	unsigned int from_new = *from, nr_new = nr, rem;
-
-	/*
-	 * When the 'card->erase_size' is power of 2, we can use round_up/down()
-	 * to align the erase size efficiently.
-	 */
-	if (is_power_of_2(card->erase_size)) {
-		unsigned int temp = from_new;
-
-		from_new = round_up(temp, card->erase_size);
-		rem = from_new - temp;
-
-		if (nr_new > rem)
-			nr_new -= rem;
-		else
-			return 0;
-
-		nr_new = round_down(nr_new, card->erase_size);
-	} else {
-		rem = from_new % card->erase_size;
-		if (rem) {
-			rem = card->erase_size - rem;
-			from_new += rem;
-			if (nr_new > rem)
-				nr_new -= rem;
-			else
-				return 0;
-		}
-
-		rem = nr_new % card->erase_size;
-		if (rem)
-			nr_new -= rem;
-	}
-
-	if (nr_new == 0)
-		return 0;
-
-	*to = from_new + nr_new;
-	*from = from_new;
-
-	return nr_new;
 }
 
 int mmc_erase_sanity_check(struct mmc_card *card, unsigned int from,
@@ -3926,18 +3814,32 @@ int mmc_cmdq_erase(struct mmc_cmdq_req *cmdq_req,
 	      struct mmc_card *card, unsigned int from, unsigned int nr,
 	      unsigned int arg)
 {
-	unsigned int to = from + nr;
+	unsigned int rem, to = from + nr;
 	int ret;
 
 	ret = mmc_erase_sanity_check(card, from, nr, arg);
 	if (ret)
 		return ret;
 
-	if (arg == MMC_ERASE_ARG)
-		nr = mmc_align_erase_size(card, &from, &to, nr);
+	if (arg == MMC_ERASE_ARG) {
+		rem = from % card->erase_size;
+		if (rem) {
+			rem = card->erase_size - rem;
+			from += rem;
+			if (nr > rem)
+				nr -= rem;
+			else
+				return 0;
+		}
+		rem = nr % card->erase_size;
+		if (rem)
+			nr -= rem;
+	}
 
 	if (nr == 0)
 		return 0;
+
+	to = from + nr;
 
 	if (to <= from)
 		return -EINVAL;
@@ -4078,43 +3980,23 @@ static unsigned int mmc_do_calc_max_discard(struct mmc_card *card,
 					    unsigned int arg)
 {
 	struct mmc_host *host = card->host;
-	unsigned int max_discard, x, y, qty = 0, max_qty, min_qty, timeout;
+	unsigned int max_discard, x, y, qty = 0, max_qty, timeout;
 	unsigned int last_timeout = 0;
-	unsigned int max_busy_timeout = host->max_busy_timeout ?
-			host->max_busy_timeout : MMC_ERASE_TIMEOUT_MS;
 
-	if (card->erase_shift) {
+	if (card->erase_shift)
 		max_qty = UINT_MAX >> card->erase_shift;
-		min_qty = card->pref_erase >> card->erase_shift;
-	} else if (mmc_card_sd(card)) {
+	else if (mmc_card_sd(card))
 		max_qty = UINT_MAX;
-		min_qty = card->pref_erase;
-	} else {
+	else
 		max_qty = UINT_MAX / card->erase_size;
-		min_qty = card->pref_erase / card->erase_size;
-	}
 
-	/*
-	 * We should not only use 'host->max_busy_timeout' as the limitation
-	 * when deciding the max discard sectors. We should set a balance value
-	 * to improve the erase speed, and it can not get too long timeout at
-	 * the same time.
-	 *
-	 * Here we set 'card->pref_erase' as the minimal discard sectors no
-	 * matter what size of 'host->max_busy_timeout', but if the
-	 * 'host->max_busy_timeout' is large enough for more discard sectors,
-	 * then we can continue to increase the max discard sectors until we
-	 * get a balance value. In cases when the 'host->max_busy_timeout'
-	 * isn't specified, use the default max erase timeout.
-	 */
+	/* Find the largest qty with an OK timeout */
 	do {
 		y = 0;
 		for (x = 1; x && x <= max_qty && max_qty - x >= qty; x <<= 1) {
 			timeout = mmc_erase_timeout(card, arg, qty + x);
-
-			if (qty + x > min_qty && timeout > max_busy_timeout)
+			if (timeout > host->max_busy_timeout)
 				break;
-
 			if (timeout < last_timeout)
 				break;
 			last_timeout = timeout;
@@ -4157,6 +4039,10 @@ unsigned int mmc_calc_max_discard(struct mmc_card *card)
 	struct mmc_host *host = card->host;
 	unsigned int max_discard, max_trim;
 
+	if (!host->max_busy_timeout ||
+			(host->caps2 & MMC_CAP2_MAX_DISCARD_SIZE))
+		return UINT_MAX;
+
 	/*
 	 * Without erase_group_def set, MMC erase timeout depends on clock
 	 * frequence which can change.  In that case, the best choice is
@@ -4174,8 +4060,7 @@ unsigned int mmc_calc_max_discard(struct mmc_card *card)
 		max_discard = 0;
 	}
 	pr_debug("%s: calculated max. discard sectors %u for timeout %u ms\n",
-		mmc_hostname(host), max_discard, host->max_busy_timeout ?
-		host->max_busy_timeout : MMC_ERASE_TIMEOUT_MS);
+		 mmc_hostname(host), max_discard, host->max_busy_timeout);
 	return max_discard;
 }
 EXPORT_SYMBOL(mmc_calc_max_discard);
@@ -4298,7 +4183,7 @@ int _mmc_detect_card_removed(struct mmc_host *host)
 {
 	int ret;
 
-	if (!mmc_card_is_removable(host))
+	if (host->caps & MMC_CAP_NONREMOVABLE)
 		return 0;
 
 	if (!host->card || mmc_card_removed(host->card))
@@ -4401,7 +4286,7 @@ void mmc_rescan(struct work_struct *work)
 	spin_unlock_irqrestore(&host->lock, flags);
 
 	/* If there is a non-removable card registered, only scan once */
-	if (!mmc_card_is_removable(host) && host->rescan_entered)
+	if ((host->caps & MMC_CAP_NONREMOVABLE) && host->rescan_entered)
 		return;
 	host->rescan_entered = 1;
 
@@ -4411,7 +4296,8 @@ void mmc_rescan(struct work_struct *work)
 	 * if there is a _removable_ card registered, check whether it is
 	 * still present
 	 */
-	if (host->bus_ops && !host->bus_dead && mmc_card_is_removable(host))
+	if (host->bus_ops && !host->bus_dead
+	    && !(host->caps & MMC_CAP_NONREMOVABLE))
 		host->bus_ops->detect(host);
 
 	host->detect_change = 0;
@@ -4437,7 +4323,7 @@ void mmc_rescan(struct work_struct *work)
 	 */
 	mmc_bus_put(host);
 
-	if (mmc_card_is_removable(host) && host->ops->get_cd &&
+	if (!(host->caps & MMC_CAP_NONREMOVABLE) && host->ops->get_cd &&
 			host->ops->get_cd(host) == 0) {
 		mmc_claim_host(host);
 		mmc_power_off(host);
@@ -4484,6 +4370,7 @@ void mmc_stop_host(struct mmc_host *host)
 
 	host->rescan_disable = 1;
 	cancel_delayed_work_sync(&host->detect);
+	mmc_flush_scheduled_work();
 
 	/* clear pm flags now and let card drivers set them as needed */
 	host->pm_flags = 0;
@@ -4740,9 +4627,13 @@ static int __init mmc_init(void)
 {
 	int ret;
 
+	workqueue = alloc_ordered_workqueue("kmmcd", 0);
+	if (!workqueue)
+		return -ENOMEM;
+
 	ret = mmc_register_bus();
 	if (ret)
-		return ret;
+		goto destroy_workqueue;
 
 	ret = mmc_register_host_class();
 	if (ret)
@@ -4758,6 +4649,9 @@ unregister_host_class:
 	mmc_unregister_host_class();
 unregister_bus:
 	mmc_unregister_bus();
+destroy_workqueue:
+	destroy_workqueue(workqueue);
+
 	return ret;
 }
 
@@ -4766,6 +4660,7 @@ static void __exit mmc_exit(void)
 	sdio_unregister_bus();
 	mmc_unregister_host_class();
 	mmc_unregister_bus();
+	destroy_workqueue(workqueue);
 }
 
 #ifdef CONFIG_BLOCK

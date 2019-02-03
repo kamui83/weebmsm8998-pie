@@ -217,6 +217,7 @@ int sdio_reset(struct mmc_host *host)
 	else
 		abort |= 0x08;
 
-	return mmc_io_rw_direct_host(host, 1, 0, SDIO_CCCR_ABORT, abort, NULL);
+	ret = mmc_io_rw_direct_host(host, 1, 0, SDIO_CCCR_ABORT, abort, NULL);
+	return ret;
 }
 

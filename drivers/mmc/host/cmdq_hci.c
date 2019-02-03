@@ -39,7 +39,7 @@
 static int cmdq_halt_poll(struct mmc_host *mmc, bool halt);
 static int cmdq_halt(struct mmc_host *mmc, bool halt);
 
-#ifdef CONFIG_PM
+#ifdef CONFIG_PM_RUNTIME
 static int cmdq_runtime_pm_get(struct cmdq_host *host)
 {
 	return pm_runtime_get_sync(host->mmc->parent);
@@ -921,8 +921,6 @@ irqreturn_t cmdq_irq(struct mmc_host *mmc, int err)
 		err_info = cmdq_readl(cq_host, CQTERRI);
 		pr_err("%s: err: %d status: 0x%08x task-err-info (0x%08lx)\n",
 		       mmc_hostname(mmc), err, status, err_info);
-		/* Dump the registers before clearing Interrupt */
-		cmdq_dumpregs(cq_host);
 
 		/*
 		 * Need to halt CQE in case of error in interrupt context itself
@@ -946,6 +944,7 @@ irqreturn_t cmdq_irq(struct mmc_host *mmc, int err)
 		 */
 		cmdq_writel(cq_host, status, CQIS);
 
+		cmdq_dumpregs(cq_host);
 
 		if (!err_info) {
 			/*
@@ -1097,7 +1096,6 @@ skip_cqterri:
 			}
 		}
 		cmdq_finish_data(mmc, tag);
-		goto hac;
 	} else {
 		cmdq_writel(cq_host, status, CQIS);
 	}
@@ -1106,7 +1104,7 @@ skip_cqterri:
 		/* read CQTCN and complete the request */
 		comp_status = cmdq_readl(cq_host, CQTCN);
 		if (!comp_status)
-			goto hac;
+			goto out;
 		/*
 		 * The CQTCN must be cleared before notifying req completion
 		 * to upper layers to avoid missing completion notification
@@ -1133,7 +1131,7 @@ skip_cqterri:
 			}
 		}
 	}
-hac:
+
 	if (status & CQIS_HAC) {
 		if (cq_host->ops->post_cqe_halt)
 			cq_host->ops->post_cqe_halt(mmc);
@@ -1144,6 +1142,7 @@ hac:
 		complete(&cq_host->halt_comp);
 	}
 
+out:
 	return IRQ_HANDLED;
 }
 EXPORT_SYMBOL(cmdq_irq);

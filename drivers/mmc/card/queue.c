@@ -23,7 +23,6 @@
 #include <linux/mmc/host.h>
 #include <linux/sched/rt.h>
 #include "queue.h"
-#include "block.h"
 
 #define MMC_QUEUE_BOUNCESZ	65536
 
@@ -135,14 +134,7 @@ static int mmc_cmdq_thread(void *d)
 		if (kthread_should_stop())
 			break;
 
-		ret = mmc_cmdq_down_rwsem(host, mq->cmdq_req_peeked);
-		if (ret) {
-			mmc_cmdq_up_rwsem(host);
-			continue;
-		}
 		ret = mq->cmdq_issue_fn(mq, mq->cmdq_req_peeked);
-		mmc_cmdq_up_rwsem(host);
-
 		/*
 		 * Don't requeue if issue_fn fails.
 		 * Recovery will be come by completion softirq
@@ -183,7 +175,7 @@ static int mmc_queue_thread(void *d)
 		if (req || mq->mqrq_prev->req) {
 			set_current_state(TASK_RUNNING);
 			cmd_flags = req ? req->cmd_flags : 0;
-			mmc_blk_issue_rq(mq, req);
+			mq->issue_fn(mq, req);
 			cond_resched();
 			if (test_bit(MMC_QUEUE_NEW_REQUEST, &mq->flags)) {
 				clear_bit(MMC_QUEUE_NEW_REQUEST, &mq->flags);
@@ -648,7 +640,6 @@ int mmc_cmdq_init(struct mmc_queue *mq, struct mmc_card *card)
 
 	init_waitqueue_head(&card->host->cmdq_ctx.queue_empty_wq);
 	init_waitqueue_head(&card->host->cmdq_ctx.wait);
-	init_rwsem(&card->host->cmdq_ctx.err_rwsem);
 
 	mq->mqrq_cmdq = kcalloc(q_depth, sizeof(struct mmc_queue_req),
 				GFP_KERNEL);

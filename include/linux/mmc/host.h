@@ -253,7 +253,6 @@ struct mmc_slot {
  * @wait		waiting for all conditions described in
  *			mmc_cmdq_ready_wait to be satisified before
  *			issuing the new request to LLD.
- * @err_rwsem		synchronizes issue/completion/error-handler ctx
  */
 struct mmc_cmdq_context_info {
 	unsigned long	active_reqs; /* in-flight requests */
@@ -267,7 +266,6 @@ struct mmc_cmdq_context_info {
 	wait_queue_head_t	queue_empty_wq;
 	wait_queue_head_t	wait;
 	int active_small_sector_read_reqs;
-	struct rw_semaphore err_rwsem;
 };
 
 /**
@@ -454,6 +452,8 @@ struct mmc_host {
 #define MMC_CAP2_CMD_QUEUE	(1 << 26)	/* support eMMC command queue */
 #define MMC_CAP2_SANITIZE       (1 << 27)               /* Support Sanitize */
 #define MMC_CAP2_SLEEP_AWAKE	(1 << 28)	/* Use Sleep/Awake (CMD5) */
+/* use max discard ignoring max_busy_timeout parameter */
+#define MMC_CAP2_MAX_DISCARD_SIZE	(1 << 29)
 
 	mmc_pm_flag_t		pm_caps;	/* supported pm features */
 

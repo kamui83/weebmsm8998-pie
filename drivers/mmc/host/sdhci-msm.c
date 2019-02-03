@@ -90,7 +90,6 @@
 #define CORE_DDR_DLL_LOCK	(1 << 11)
 
 #define CORE_CLK_PWRSAVE		(1 << 1)
-#define CORE_VNDR_SPEC_ADMA_ERR_SIZE_EN	(1 << 7)
 #define CORE_HC_MCLK_SEL_DFLT		(2 << 8)
 #define CORE_HC_MCLK_SEL_HS400		(3 << 8)
 #define CORE_HC_MCLK_SEL_MASK		(3 << 8)
@@ -4498,12 +4497,6 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	writel_relaxed(CORE_VENDOR_SPEC_POR_VAL,
 	host->ioaddr + msm_host_offset->CORE_VENDOR_SPEC);
 
-	/* This enable ADMA error interrupt in case of length mismatch */
-	writel_relaxed((readl_relaxed(host->ioaddr +
-			msm_host_offset->CORE_VENDOR_SPEC) |
-			CORE_VNDR_SPEC_ADMA_ERR_SIZE_EN),
-			host->ioaddr + msm_host_offset->CORE_VENDOR_SPEC);
-
 	/*
 	 * Ensure SDHCI FIFO is enabled by disabling alternative FIFO
 	 */
@@ -4632,6 +4625,7 @@ static int sdhci_msm_probe(struct platform_device *pdev)
 	msm_host->mmc->caps2 |= MMC_CAP2_HS400_POST_TUNING;
 	msm_host->mmc->caps2 |= MMC_CAP2_CLK_SCALE;
 	msm_host->mmc->caps2 |= MMC_CAP2_SANITIZE;
+	msm_host->mmc->caps2 |= MMC_CAP2_MAX_DISCARD_SIZE;
 	msm_host->mmc->caps2 |= MMC_CAP2_SLEEP_AWAKE;
 	msm_host->mmc->pm_caps |= MMC_PM_KEEP_POWER | MMC_PM_WAKE_SDIO_IRQ;
 
