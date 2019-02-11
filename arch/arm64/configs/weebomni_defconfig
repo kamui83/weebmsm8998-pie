@@ -3365,6 +3365,7 @@ CONFIG_USB_DEFAULT_PERSIST=y
 # CONFIG_USB_ULPI_BUS is not set
 # CONFIG_USB_MON is not set
 # CONFIG_USB_WUSB_CBAF is not set
+CONFIG_FORCE_FAST_CHARGE=y
 
 #
 # USB Host Controller Drivers
