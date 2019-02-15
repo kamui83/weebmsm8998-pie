@@ -21,4 +21,9 @@
 #define __norecordmcount \
 	__attribute__((__section__(".text..ftrace")))
 #endif
+/*
+ * Clang supports FORTIFY_SOURCE; this needs to override compiler-gcc.h turning it off
+ */
+#ifdef __NO_FORTIFY
+#undef __NO_FORTIFY
 #endif
