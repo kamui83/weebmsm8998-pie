@@ -10,7 +10,6 @@ config ARM64
 	select ARCH_HAS_SG_CHAIN
 	select ARCH_HAS_TICK_BROADCAST if GENERIC_CLOCKEVENTS_BROADCAST
 	select ARCH_USE_CMPXCHG_LOCKREF
-	select ARCH_SUPPORTS_LTO_CLANG
 	select ARCH_SUPPORTS_ATOMIC_RMW
 	select ARCH_WANT_OPTIONAL_GPIOLIB
 	select ARCH_WANT_COMPAT_IPC_PARSE_VERSION
@@ -80,7 +79,6 @@ config ARM64
 	select HAVE_GENERIC_DMA_COHERENT
 	select HAVE_HW_BREAKPOINT if PERF_EVENTS
 	select HAVE_IRQ_TIME_ACCOUNTING
- 	select HAVE_LD_DEAD_CODE_DATA_ELIMINATION
 	select HAVE_MEMBLOCK
 	select HAVE_PATA_PLATFORM
 	select HAVE_PERF_EVENTS
@@ -463,13 +461,18 @@ config ARM64_ERRATUM_845719
 
 config ARM64_ERRATUM_843419
 	bool "Cortex-A53: 843419: A load or store might access an incorrect address"
-	default y if !LTO_CLANG
-	select ARM64_MODULE_CMODEL_LARGE if MODULES
+	depends on MODULES
+	default y
+	select ARM64_MODULE_CMODEL_LARGE
 	help
-	  This option links the kernel with '--fix-cortex-a53-843419' and
-	  builds modules using the large memory model in order to avoid the use
-	  of the ADRP instruction, which can cause a subsequent memory access
-	  to use an incorrect address on Cortex-A53 parts up to r0p4.
+	  This option builds kernel modules using the large memory model in
+	  order to avoid the use of the ADRP instruction, which can cause
+	  a subsequent memory access to use an incorrect address on Cortex-A53
+	  parts up to r0p4.
+
+	  Note that the kernel itself must be linked with a version of ld
+	  which fixes potentially affected ADRP instructions through the
+	  use of veneers.
 
 	  If unsure, say Y.
 
@@ -1042,7 +1045,7 @@ config RANDOMIZE_BASE
 
 config RANDOMIZE_MODULE_REGION_FULL
 	bool "Randomize the module region independently from the core kernel"
-	depends on RANDOMIZE_BASE && !DYNAMIC_FTRACE && !LTO_CLANG
+	depends on RANDOMIZE_BASE && !DYNAMIC_FTRACE
 	default y
 	help
 	  Randomizes the location of the module region without considering the
