@@ -23,23 +23,6 @@ LDFLAGS_vmlinux		+= -pie -shared -Bsymbolic \
 			$(call ld-option, --no-apply-dynamic-relocs)
 endif
 
-ifeq ($(CONFIG_ARM64_ERRATUM_843419),y)
-  ifeq ($(call ld-option, --fix-cortex-a53-843419),)
-$(warning ld does not support --fix-cortex-a53-843419; kernel may be susceptible to erratum)
-  else
-    ifeq ($(call gold-ifversion, -lt, 114000000, y), y)
-$(warning This version of GNU gold may generate incorrect code with --fix-cortex-a53-843419;\
-	see https://sourceware.org/bugzilla/show_bug.cgi?id=21491)
-    endif
-LDFLAGS_vmlinux	+= --fix-cortex-a53-843419
-  endif
-else
-  ifeq ($(ld-name),gold)
-# Pass --no-fix-cortex-a53-843419 to ensure the erratum fix is disabled
-LDFLAGS	+= --no-fix-cortex-a53-843419
-  endif
-endif
-
 KBUILD_DEFCONFIG := defconfig
 
 # Check for binutils support for specific extensions
@@ -84,6 +67,16 @@ endif
 
 ifeq ($(cc-name),clang)
 KBUILD_CFLAGS	+= $(call clang-ifversion, -ge, 0600, -mgeneral-regs-only, -mno-implicit-float)
+ifeq ($(CONFIG_POLLY_CLANG), y)
+KBUILD_CFLAGS	+= -mllvm -polly \
+			-mllvm -polly-run-dce \
+			-mllvm -polly-run-inliner \
+			-mllvm -polly-opt-fusion=max \
+			-mllvm -polly-ast-use-context \
+			-mllvm -polly-vectorizer=stripmine \
+			-mllvm -polly-detect-keep-going
+
+endif
 else
 KBUILD_CFLAGS	+= -mgeneral-regs-only
 endif
@@ -112,10 +105,6 @@ CHECKFLAGS	+= -D__aarch64__
 
 ifeq ($(CONFIG_ARM64_MODULE_CMODEL_LARGE), y)
 KBUILD_CFLAGS_MODULE	+= -mcmodel=large
-ifeq ($(CONFIG_LTO_CLANG), y)
-# Code model is not stored in LLVM IR, so we need to pass it also to LLVMgold
-KBUILD_LDFLAGS_MODULE	+= -plugin-opt=-code-model=large
-endif
 endif
 
 ifeq ($(CONFIG_ARM64_MODULE_PLTS),y)
