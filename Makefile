@@ -397,9 +397,6 @@ KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common \
 		   -Werror-implicit-function-declaration \
 		   -Wno-format-security \
-		   -Wno-attribute-alias \
-		   -Wno-address-of-packed-member \
-		   -Wno-missing-attributes \
 		   -std=gnu89 $(CLANG_FLAGS)
 
 KBUILD_AFLAGS_KERNEL :=
