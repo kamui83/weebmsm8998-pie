@@ -3965,9 +3965,9 @@ static int glink_core_init_xprt_qos_cfg(struct glink_core_xprt_ctx *xprt_ptr,
 	xprt_ptr->token_count = cfg->token_count ? cfg->token_count :
 					GLINK_QOS_DEF_NUM_TOKENS;
 
-	xprt_ptr->prio_bin = kzalloc(xprt_ptr->num_priority *
-				sizeof(struct glink_qos_priority_bin),
-				GFP_KERNEL);
+	xprt_ptr->prio_bin = kcalloc(xprt_ptr->num_priority,
+				     sizeof(struct glink_qos_priority_bin),
+				     GFP_KERNEL);
 	if (xprt_ptr->num_priority > 1)
 		sched_setscheduler(xprt_ptr->tx_task, SCHED_FIFO, &param);
 	if (!xprt_ptr->prio_bin) {
@@ -4098,8 +4098,8 @@ int glink_core_register_transport(struct glink_transport_if *if_ptr,
 	INIT_LIST_HEAD(&xprt_ptr->notified);
 	spin_lock_init(&xprt_ptr->tx_ready_lock_lhb3);
 	mutex_init(&xprt_ptr->xprt_dbgfs_lock_lhb4);
-	init_kthread_work(&xprt_ptr->tx_kwork, tx_func);
-	init_kthread_worker(&xprt_ptr->tx_wq);
+	kthread_init_work(&xprt_ptr->tx_kwork, tx_func);
+	kthread_init_worker(&xprt_ptr->tx_wq);
 	xprt_ptr->tx_task = kthread_run(kthread_worker_fn,
 			&xprt_ptr->tx_wq, "%s_%s_glink_tx",
 			xprt_ptr->edge, xprt_ptr->name);
@@ -4126,11 +4126,12 @@ int glink_core_register_transport(struct glink_transport_if *if_ptr,
 	glink_debugfs_add_xprt(xprt_ptr);
 	snprintf(log_name, sizeof(log_name), "%s_%s",
 			xprt_ptr->edge, xprt_ptr->name);
+#ifdef CONFIG_IPC_LOGGING
 	xprt_ptr->log_ctx = ipc_log_context_create(NUM_LOG_PAGES, log_name, 0);
 	if (!xprt_ptr->log_ctx)
 		GLINK_ERR("%s: unable to create log context for [%s:%s]\n",
 				__func__, xprt_ptr->edge, xprt_ptr->name);
-
+#endif
 	return 0;
 }
 EXPORT_SYMBOL(glink_core_register_transport);
@@ -4205,7 +4206,7 @@ static void glink_core_link_down(struct glink_transport_if *if_ptr)
 	GLINK_DBG_XPRT(xprt_ptr,
 		"%s: Flushing work from tx_wq. Thread: %u\n", __func__,
 		current->pid);
-	flush_kthread_worker(&xprt_ptr->tx_wq);
+	kthread_flush_worker(&xprt_ptr->tx_wq);
 	glink_core_channel_cleanup(xprt_ptr);
 	check_link_notifier_and_notify(xprt_ptr, GLINK_LINK_STATE_DOWN);
 }
@@ -5071,7 +5072,7 @@ static void glink_core_rx_cmd_ch_remote_close(
 
 	if (is_ch_fully_closed) {
 		glink_delete_ch_from_list(ctx, true);
-		flush_kthread_worker(&xprt_ptr->tx_wq);
+		kthread_flush_worker(&xprt_ptr->tx_wq);
 	}
 	rwref_put(&ctx->ch_state_lhb2);
 }
@@ -5109,7 +5110,7 @@ static void glink_core_rx_cmd_ch_close_ack(struct glink_transport_if *if_ptr,
 	is_ch_fully_closed = glink_core_ch_close_ack_common(ctx, false);
 	if (is_ch_fully_closed) {
 		glink_delete_ch_from_list(ctx, true);
-		flush_kthread_worker(&xprt_ptr->tx_wq);
+		kthread_flush_worker(&xprt_ptr->tx_wq);
 	}
 	rwref_put(&ctx->ch_state_lhb2);
 }
@@ -5452,7 +5453,7 @@ static void xprt_schedule_tx(struct glink_core_xprt_ctx *xprt_ptr,
 	spin_unlock(&ch_ptr->tx_lists_lock_lhc3);
 	spin_unlock_irqrestore(&xprt_ptr->tx_ready_lock_lhb3, flags);
 
-	queue_kthread_work(&xprt_ptr->tx_wq, &xprt_ptr->tx_kwork);
+	kthread_queue_work(&xprt_ptr->tx_wq, &xprt_ptr->tx_kwork);
 }
 
 /**
@@ -5756,7 +5757,7 @@ static void glink_core_tx_resume(struct glink_transport_if *if_ptr)
 {
 	struct glink_core_xprt_ctx *xprt_ptr = if_ptr->glink_core_priv;
 
-	queue_kthread_work(&xprt_ptr->tx_wq, &xprt_ptr->tx_kwork);
+	kthread_queue_work(&xprt_ptr->tx_wq, &xprt_ptr->tx_kwork);
 }
 
 /**
@@ -6312,9 +6313,11 @@ EXPORT_SYMBOL(glink_get_xprt_log_ctx);
 
 static int glink_init(void)
 {
+#ifdef CONFIG_IPC_LOGGING
 	log_ctx = ipc_log_context_create(NUM_LOG_PAGES, "glink", 0);
 	if (!log_ctx)
 		GLINK_ERR("%s: unable to create log context\n", __func__);
+#endif
 	glink_debugfs_init();
 
 	return 0;

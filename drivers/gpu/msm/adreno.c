@@ -986,6 +986,14 @@ static int adreno_probe(struct platform_device *pdev)
 	if (adreno_support_64bit(adreno_dev))
 		device->mmu.features |= KGSL_MMU_64BIT;
 
+	/* Default to 4K alignment (in other words, no additional padding) */
+	device->mmu.va_padding = PAGE_SIZE;
+
+	if (adreno_dev->gpucore->va_padding) {
+		device->mmu.features |= KGSL_MMU_PAD_VA;
+		device->mmu.va_padding = adreno_dev->gpucore->va_padding;
+	}
+
 	status = kgsl_device_platform_probe(device);
 	if (status) {
 		device->pdev = NULL;
@@ -1132,10 +1140,10 @@ static void adreno_fault_detect_init(struct adreno_device *adreno_dev)
 	adreno_ft_regs_num = (ARRAY_SIZE(adreno_ft_regs_default) +
 		gpudev->ft_perf_counters_count*2);
 
-	adreno_ft_regs = kzalloc(adreno_ft_regs_num * sizeof(unsigned int),
-		GFP_KERNEL);
-	adreno_ft_regs_val = kzalloc(adreno_ft_regs_num * sizeof(unsigned int),
-		GFP_KERNEL);
+	adreno_ft_regs = kcalloc(adreno_ft_regs_num, sizeof(unsigned int),
+				 GFP_KERNEL);
+	adreno_ft_regs_val = kcalloc(adreno_ft_regs_num, sizeof(unsigned int),
+				     GFP_KERNEL);
 
 	if (adreno_ft_regs == NULL || adreno_ft_regs_val == NULL) {
 		kfree(adreno_ft_regs);
@@ -1301,6 +1309,53 @@ static void _set_secvid(struct kgsl_device *device)
 			ADRENO_REG_RBBM_SECVID_TSB_TRUSTED_SIZE,
 			KGSL_IOMMU_SECURE_SIZE);
 	}
+}
+
+static int adreno_switch_to_unsecure_mode(struct adreno_device *adreno_dev,
+				struct adreno_ringbuffer *rb)
+{
+	unsigned int *cmds;
+	int ret;
+
+	cmds = adreno_ringbuffer_allocspace(rb, 2);
+	if (IS_ERR(cmds))
+		return PTR_ERR(cmds);
+	if (cmds == NULL)
+		return -ENOSPC;
+
+	cmds += cp_secure_mode(adreno_dev, cmds, 0);
+
+	ret = adreno_ringbuffer_submit_spin(rb, NULL, 2000);
+	if (ret)
+		adreno_spin_idle_debug(adreno_dev,
+				"Switch to unsecure failed to idle\n");
+
+	return ret;
+}
+
+int adreno_set_unsecured_mode(struct adreno_device *adreno_dev,
+		struct adreno_ringbuffer *rb)
+{
+	int ret = 0;
+
+	if (!adreno_is_a5xx(adreno_dev))
+		return -EINVAL;
+
+	if (ADRENO_QUIRK(adreno_dev, ADRENO_QUIRK_CRITICAL_PACKETS) &&
+			adreno_is_a5xx(adreno_dev)) {
+		ret = a5xx_critical_packet_submit(adreno_dev, rb);
+		if (ret)
+			return ret;
+	}
+
+	/* GPU comes up in secured mode, make it unsecured by default */
+	if (adreno_dev->zap_loaded)
+		ret = adreno_switch_to_unsecure_mode(adreno_dev, rb);
+	else
+		adreno_writereg(adreno_dev,
+				ADRENO_REG_RBBM_SECVID_TRUST_CONTROL, 0x0);
+
+	return ret;
 }
 
 /**
@@ -2263,6 +2318,34 @@ bool adreno_isidle(struct kgsl_device *device)
 	return adreno_hw_isidle(adreno_dev);
 }
 
+/* Print some key registers if a spin-for-idle times out */
+void adreno_spin_idle_debug(struct adreno_device *adreno_dev,
+		const char *str)
+{
+	struct kgsl_device *device = &adreno_dev->dev;
+	unsigned int rptr, wptr;
+	unsigned int status, status3, intstatus;
+	unsigned int hwfault;
+
+	dev_err(device->dev, str);
+
+	adreno_readreg(adreno_dev, ADRENO_REG_CP_RB_RPTR, &rptr);
+	adreno_readreg(adreno_dev, ADRENO_REG_CP_RB_WPTR, &wptr);
+
+	adreno_readreg(adreno_dev, ADRENO_REG_RBBM_STATUS, &status);
+	adreno_readreg(adreno_dev, ADRENO_REG_RBBM_STATUS3, &status3);
+	adreno_readreg(adreno_dev, ADRENO_REG_RBBM_INT_0_STATUS, &intstatus);
+	adreno_readreg(adreno_dev, ADRENO_REG_CP_HW_FAULT, &hwfault);
+
+	dev_err(device->dev,
+		"rb=%d pos=%X/%X rbbm_status=%8.8X/%8.8X int_0_status=%8.8X\n",
+		adreno_dev->cur_rb->id, rptr, wptr, status, status3, intstatus);
+
+	dev_err(device->dev, " hwfault=%8.8X\n", hwfault);
+
+	kgsl_device_snapshot(device, NULL);
+}
+
 /**
  * adreno_spin_idle() - Spin wait for the GPU to idle
  * @adreno_dev: Pointer to an adreno device
@@ -2807,7 +2890,8 @@ static void adreno_suspend_device(struct kgsl_device *device,
 	struct adreno_gpudev *gpudev = ADRENO_GPU_DEVICE(adreno_dev);
 	int pm_event = pm_state.event;
 
-	adreno_dispatcher_halt(device);
+	if (device->state == KGSL_STATE_SUSPEND)
+		adreno_dispatcher_halt(device);
 
 	if ((pm_event == PM_EVENT_FREEZE) ||
 		(pm_event == PM_EVENT_QUIESCE) ||

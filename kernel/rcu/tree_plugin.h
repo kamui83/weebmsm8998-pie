@@ -690,83 +690,6 @@ void synchronize_rcu(void)
 }
 EXPORT_SYMBOL_GPL(synchronize_rcu);
 
-/*
- * Remote handler for smp_call_function_single().  If there is an
- * RCU read-side critical section in effect, request that the
- * next rcu_read_unlock() record the quiescent state up the
- * ->expmask fields in the rcu_node tree.  Otherwise, immediately
- * report the quiescent state.
- */
-static void sync_rcu_exp_handler(void *info)
-{
-	struct rcu_data *rdp;
-	struct rcu_state *rsp = info;
-	struct task_struct *t = current;
-
-	/*
-	 * Within an RCU read-side critical section, request that the next
-	 * rcu_read_unlock() report.  Unless this RCU read-side critical
-	 * section has already blocked, in which case it is already set
-	 * up for the expedited grace period to wait on it.
-	 */
-	if (t->rcu_read_lock_nesting > 0 &&
-	    !t->rcu_read_unlock_special.b.blocked) {
-		t->rcu_read_unlock_special.b.exp_need_qs = true;
-		return;
-	}
-
-	/*
-	 * We are either exiting an RCU read-side critical section (negative
-	 * values of t->rcu_read_lock_nesting) or are not in one at all
-	 * (zero value of t->rcu_read_lock_nesting).  Or we are in an RCU
-	 * read-side critical section that blocked before this expedited
-	 * grace period started.  Either way, we can immediately report
-	 * the quiescent state.
-	 */
-	rdp = this_cpu_ptr(rsp->rda);
-	rcu_report_exp_rdp(rsp, rdp, true);
-}
-
-/**
- * synchronize_rcu_expedited - Brute-force RCU grace period
- *
- * Wait for an RCU-preempt grace period, but expedite it.  The basic
- * idea is to invoke synchronize_sched_expedited() to push all the tasks to
- * the ->blkd_tasks lists and wait for this list to drain.  This consumes
- * significant time on all CPUs and is unfriendly to real-time workloads,
- * so is thus not recommended for any sort of common-case code.
- * In fact, if you are using synchronize_rcu_expedited() in a loop,
- * please restructure your code to batch your updates, and then Use a
- * single synchronize_rcu() instead.
- */
-void synchronize_rcu_expedited(void)
-{
-	struct rcu_node *rnp;
-	struct rcu_node *rnp_unlock;
-	struct rcu_state *rsp = rcu_state_p;
-	unsigned long s;
-
-	s = rcu_exp_gp_seq_snap(rsp);
-
-	rnp_unlock = exp_funnel_lock(rsp, s);
-	if (rnp_unlock == NULL)
-		return;  /* Someone else did our work for us. */
-
-	rcu_exp_gp_seq_start(rsp);
-
-	/* Initialize the rcu_node tree in preparation for the wait. */
-	sync_rcu_exp_select_cpus(rsp, sync_rcu_exp_handler);
-
-	/* Wait for snapshotted ->blkd_tasks lists to drain. */
-	rnp = rcu_get_root(rsp);
-	synchronize_sched_expedited_wait(rsp);
-
-	/* Clean up and exit. */
-	rcu_exp_gp_seq_end(rsp);
-	mutex_unlock(&rnp_unlock->exp_funnel_mutex);
-}
-EXPORT_SYMBOL_GPL(synchronize_rcu_expedited);
-
 /**
  * rcu_barrier - Wait until all in-flight call_rcu() callbacks complete.
  *
@@ -890,16 +813,6 @@ static void rcu_preempt_check_blocked_tasks(struct rcu_node *rnp)
 static void rcu_preempt_check_callbacks(void)
 {
 }
-
-/*
- * Wait for an rcu-preempt grace period, but make it happen quickly.
- * But because preemptible RCU does not exist, map to rcu-sched.
- */
-void synchronize_rcu_expedited(void)
-{
-	synchronize_sched_expedited();
-}
-EXPORT_SYMBOL_GPL(synchronize_rcu_expedited);
 
 /*
  * Because preemptible RCU does not exist, rcu_barrier() is just
@@ -1265,8 +1178,9 @@ static void rcu_boost_kthread_setaffinity(struct rcu_node *rnp, int outgoingcpu)
 		return;
 	if (!zalloc_cpumask_var(&cm, GFP_KERNEL))
 		return;
-	for (cpu = rnp->grplo; cpu <= rnp->grphi; cpu++, mask >>= 1)
-		if ((mask & 0x1) && cpu != outgoingcpu)
+	for_each_leaf_node_possible_cpu(rnp, cpu)
+		if ((mask & leaf_node_cpu_bit(rnp, cpu)) &&
+		    cpu != outgoingcpu)
 			cpumask_set_cpu(cpu, cm);
 	if (cpumask_weight(cm) == 0)
 		cpumask_setall(cm);
@@ -1522,7 +1436,8 @@ static void rcu_prepare_for_idle(void)
 	struct rcu_state *rsp;
 	int tne;
 
-	if (IS_ENABLED(CONFIG_RCU_NOCB_CPU_ALL))
+	if (IS_ENABLED(CONFIG_RCU_NOCB_CPU_ALL) ||
+	    rcu_is_nocb_cpu(smp_processor_id()))
 		return;
 
 	/* Handle nohz enablement switches conservatively. */
@@ -1534,10 +1449,6 @@ static void rcu_prepare_for_idle(void)
 		return;
 	}
 	if (!tne)
-		return;
-
-	/* If this is a no-CBs CPU, no callbacks, just return. */
-	if (rcu_is_nocb_cpu(smp_processor_id()))
 		return;
 
 	/*
@@ -1866,6 +1777,7 @@ static void wake_nocb_leader(struct rcu_data *rdp, bool force)
 	if (READ_ONCE(rdp_leader->nocb_leader_sleep) || force) {
 		/* Prior smp_mb__after_atomic() orders against prior enqueue. */
 		WRITE_ONCE(rdp_leader->nocb_leader_sleep, false);
+                smp_mb(); /* ->nocb_leader_sleep before wake_up(). */
 		wake_up(&rdp_leader->nocb_wq);
 	}
 }
@@ -2121,6 +2033,7 @@ wait_again:
 	 * nocb_gp_head, where they await a grace period.
 	 */
 	gotcbs = false;
+	smp_mb(); /* wakeup before ->nocb_head reads. */
 	for (rdp = my_rdp; rdp; rdp = rdp->nocb_next_follower) {
 		rdp->nocb_gp_head = READ_ONCE(rdp->nocb_head);
 		if (!rdp->nocb_gp_head)

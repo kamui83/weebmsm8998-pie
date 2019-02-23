@@ -237,28 +237,23 @@ static ssize_t event_trigger_regex_write(struct file *file,
 	if (cnt >= PAGE_SIZE)
 		return -EINVAL;
 
-	buf = (char *)__get_free_page(GFP_TEMPORARY);
-	if (!buf)
-		return -ENOMEM;
+	buf = memdup_user_nul(ubuf, cnt);
+	if (IS_ERR(buf))
+		return PTR_ERR(buf);
 
-	if (copy_from_user(buf, ubuf, cnt)) {
-		free_page((unsigned long)buf);
-		return -EFAULT;
-	}
-	buf[cnt] = '\0';
 	strim(buf);
 
 	mutex_lock(&event_mutex);
 	event_file = event_file_data(file);
 	if (unlikely(!event_file)) {
 		mutex_unlock(&event_mutex);
-		free_page((unsigned long)buf);
+		kfree(buf);
 		return -ENODEV;
 	}
 	ret = trigger_process_regex(event_file, buf);
 	mutex_unlock(&event_mutex);
 
-	free_page((unsigned long)buf);
+	kfree(buf);
 	if (ret < 0)
 		goto out;
 
@@ -727,8 +722,10 @@ static int set_trigger_filter(char *filter_str,
 
 	/* The filter is for the 'trigger' event, not the triggered event */
 	ret = create_event_filter(file->event_call, filter_str, false, &filter);
-	if (ret)
-		goto out;
+	/*
+	 * If create_event_filter() fails, filter still needs to be freed.
+	 * Which the calling code will do with data->filter.
+	 */
  assign:
 	tmp = rcu_access_pointer(data->filter);
 

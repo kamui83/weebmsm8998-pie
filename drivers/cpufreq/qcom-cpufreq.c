@@ -377,7 +377,7 @@ static struct cpufreq_frequency_table *cpufreq_parse_dt(struct device *dev,
 	if (nf == 0)
 		return ERR_PTR(-EINVAL);
 
-	data = devm_kzalloc(dev, nf * sizeof(*data), GFP_KERNEL);
+	data = devm_kcalloc(dev, nf, sizeof(*data), GFP_KERNEL);
 	if (!data)
 		return ERR_PTR(-ENOMEM);
 
@@ -385,7 +385,7 @@ static struct cpufreq_frequency_table *cpufreq_parse_dt(struct device *dev,
 	if (ret)
 		return ERR_PTR(ret);
 
-	ftbl = devm_kzalloc(dev, (nf + 1) * sizeof(*ftbl), GFP_KERNEL);
+	ftbl = devm_kcalloc(dev, nf + 1, sizeof(*ftbl), GFP_KERNEL);
 	if (!ftbl)
 		return ERR_PTR(-ENOMEM);
 
@@ -514,9 +514,9 @@ static struct platform_driver msm_cpufreq_plat_driver = {
 
 static int get_c0_available_cpufreq(void)
 {
-	unsigned int max_cpufreq_index, min_cpufreq_index;
-	unsigned int max_index;
-	unsigned int index_max, index_min;
+	unsigned int max_cpufreq_index = 0, min_cpufreq_index = 0;
+	unsigned int max_index = 0;
+	unsigned int index_max = 0, index_min = 0;
 	struct cpufreq_frequency_table *table, *pos;
 
       	table = cpufreq_frequency_get_table(0);
@@ -563,10 +563,10 @@ static int get_c0_available_cpufreq(void)
 
 static int get_c1_available_cpufreq(void)
 {
-        unsigned int max_cpufreq_index, min_cpufreq_index;
-        unsigned int max_index;
-        unsigned int index_max, index_min;
-        struct cpufreq_frequency_table *table, *pos;
+	unsigned int max_cpufreq_index = 0, min_cpufreq_index = 0;
+	unsigned int max_index = 0;
+	unsigned int index_max = 0, index_min = 0;
+	struct cpufreq_frequency_table *table, *pos;
 
 	table = cpufreq_frequency_get_table(cluster1_first_cpu);
 	if (!table) {
@@ -634,8 +634,8 @@ static int c0_cpufreq_qos_handler(struct notifier_block *b, unsigned long val, v
 	}
 
 	ret = get_c0_available_cpufreq();
-	if (!ret) {
-        	cpufreq_cpu_put(policy);
+	if (ret) {
+		cpufreq_cpu_put(policy);
 		return NOTIFY_BAD;
 	}
 
@@ -706,7 +706,7 @@ static void c0_cpufreq_limit(struct work_struct *work)
 			LITTLE_CPU_QOS_FREQ, CPUFREQ_RELATION_H);
 		cpufreq_cpu_put(policy);
 	}
-	sched_set_boost(1);
+	// sched_set_boost(1);
 }
 
 void c0_cpufreq_limit_queue(void)

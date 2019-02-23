@@ -2122,6 +2122,45 @@ static inline void _close_clks(struct kgsl_device *device)
 		devm_clk_put(&device->pdev->dev, pwr->gpu_bimc_int_clk);
 }
 
+static bool _gpu_freq_supported(struct kgsl_pwrctrl *pwr, unsigned int freq)
+{
+	int i;
+
+	for (i = pwr->num_pwrlevels - 2; i >= 0; i--) {
+		if (pwr->pwrlevels[i].gpu_freq == freq)
+			return true;
+	}
+
+	return false;
+}
+
+static void kgsl_pwrctrl_disable_unused_opp(struct kgsl_device *device)
+{
+	struct device *dev = &device->pdev->dev;
+	struct dev_pm_opp *opp;
+	unsigned long freq = 0;
+	int ret;
+
+	ret = dev_pm_opp_get_opp_count(dev);
+	/* Return early, If no OPP table or OPP count is zero */
+	if (ret <= 0)
+		return;
+
+	while (1) {
+		rcu_read_lock();
+		opp = dev_pm_opp_find_freq_ceil(dev, &freq);
+		rcu_read_unlock();
+
+		if (IS_ERR(opp))
+			break;
+
+		if (!_gpu_freq_supported(&device->pwrctrl, freq))
+			dev_pm_opp_disable(dev, freq);
+
+		freq++;
+	}
+}
+
 int kgsl_pwrctrl_init(struct kgsl_device *device)
 {
 	int i, k, m, n = 0, result, freq;
@@ -2178,6 +2217,7 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 		pwr->pwrlevels[i].gpu_freq = freq;
 	}
 
+	kgsl_pwrctrl_disable_unused_opp(device);
 	kgsl_pwrctrl_clk_set_rate(pwr->grp_clks[0],
 		pwr->pwrlevels[pwr->num_pwrlevels - 1].gpu_freq, clocks[0]);
 
@@ -2253,8 +2293,9 @@ int kgsl_pwrctrl_init(struct kgsl_device *device)
 		}
 	}
 
-	pwr->bus_ib = kzalloc(bus_scale_table->num_usecases *
-		sizeof(*pwr->bus_ib), GFP_KERNEL);
+	pwr->bus_ib = kcalloc(bus_scale_table->num_usecases,
+			      sizeof(*pwr->bus_ib),
+			      GFP_KERNEL);
 	if (pwr->bus_ib == NULL) {
 		result = -ENOMEM;
 		goto error_cleanup_pcl;
@@ -2785,7 +2826,7 @@ static int _suspend(struct kgsl_device *device)
 	if ((device->state == KGSL_STATE_NONE) ||
 			(device->state == KGSL_STATE_INIT) ||
 			(device->state == KGSL_STATE_SUSPEND))
-		goto done;
+		return ret;
 
 	/* drain to prevent from more commands being submitted */
 	device->ftbl->drain(device);
@@ -2802,7 +2843,6 @@ static int _suspend(struct kgsl_device *device)
 	if (ret)
 		goto err;
 
-done:
 	kgsl_pwrctrl_set_state(device, KGSL_STATE_SUSPEND);
 	return ret;
 

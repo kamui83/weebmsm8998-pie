@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2014-2015, The Linux Foundation. All rights reserved.
+ * Copyright (c) 2014-2015, 2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -182,14 +182,14 @@ static int cpufreq_policy_notifier(struct notifier_block *nb,
 	struct cpufreq_policy *policy = data;
 
 	switch (event) {
-	case CPUFREQ_CREATE_POLICY:
+	case CPUFREQ_START:
 		mutex_lock(&state_lock);
 		add_policy(policy);
 		update_all_devfreqs();
 		mutex_unlock(&state_lock);
 		break;
 
-	case CPUFREQ_REMOVE_POLICY:
+	case CPUFREQ_STOP:
 		mutex_lock(&state_lock);
 		if (state[policy->cpu]) {
 			state[policy->cpu]->on = false;
@@ -586,7 +586,7 @@ static struct freq_map *read_tbl(struct device_node *of_node, char *prop_name)
 		return NULL;
 	nf = len / NUM_COLS;
 
-	tbl = kzalloc((nf + 1) * sizeof(*tbl), GFP_KERNEL);
+	tbl = kcalloc(nf + 1, sizeof(*tbl), GFP_KERNEL);
 	if (!tbl)
 		return NULL;
 
@@ -623,7 +623,7 @@ static int add_table_from_of(struct device_node *of_node)
 
 	common_tbl = read_tbl(of_node, PROP_TABLE);
 	if (!common_tbl) {
-		tbl_list = kzalloc(sizeof(*tbl_list) * NR_CPUS, GFP_KERNEL);
+		tbl_list = kcalloc(NR_CPUS, sizeof(*tbl_list), GFP_KERNEL);
 		if (!tbl_list)
 			return -ENOMEM;
 

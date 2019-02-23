@@ -208,8 +208,8 @@ static inline bool _isidle(struct adreno_device *adreno_dev)
 	if (!kgsl_state_is_awake(KGSL_DEVICE(adreno_dev)))
 		goto ret;
 
-	if (adreno_rb_empty(adreno_dev->cur_rb))
-		goto ret;
+	if (!adreno_rb_empty(adreno_dev->cur_rb))
+		return false;
 
 	/* only check rbbm status to determine if GPU is idle */
 	adreno_readreg(adreno_dev, ADRENO_REG_RBBM_STATUS, &reg_rbbm_status);
@@ -560,6 +560,8 @@ static int sendcmd(struct adreno_device *adreno_dev,
 		mutex_unlock(&device->mutex);
 		return -EBUSY;
 	}
+
+	memset(&time, 0x0, sizeof(time));
 
 	dispatcher->inflight++;
 	dispatch_q->inflight++;
@@ -1943,7 +1945,7 @@ static void recover_dispatch_q(struct kgsl_device *device,
 	int i;
 
 	/* Allocate memory to store the inflight commands */
-	replay = kzalloc(sizeof(*replay) * dispatch_q->inflight, GFP_KERNEL);
+	replay = kcalloc(dispatch_q->inflight, sizeof(*replay), GFP_KERNEL);
 
 	if (replay == NULL) {
 		unsigned int ptr = dispatch_q->head;
@@ -2506,7 +2508,7 @@ void adreno_dispatcher_schedule(struct kgsl_device *device)
 	struct adreno_device *adreno_dev = ADRENO_DEVICE(device);
 	struct adreno_dispatcher *dispatcher = &adreno_dev->dispatcher;
 
-	queue_kthread_work(&kgsl_driver.worker, &dispatcher->work);
+	kthread_queue_work(&kgsl_driver.worker, &dispatcher->work);
 }
 
 /**
@@ -2802,7 +2804,7 @@ int adreno_dispatcher_init(struct adreno_device *adreno_dev)
 	setup_timer(&dispatcher->fault_timer, adreno_dispatcher_fault_timer,
 		(unsigned long) adreno_dev);
 
-	init_kthread_work(&dispatcher->work, adreno_dispatcher_work);
+	kthread_init_work(&dispatcher->work, adreno_dispatcher_work);
 
 	init_completion(&dispatcher->idle_gate);
 	complete_all(&dispatcher->idle_gate);

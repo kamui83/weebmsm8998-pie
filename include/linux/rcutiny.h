@@ -47,15 +47,8 @@ static inline void cond_synchronize_sched(unsigned long oldstate)
 	might_sleep();
 }
 
-static inline void rcu_barrier_bh(void)
-{
-	wait_rcu_gp(call_rcu_bh);
-}
-
-static inline void rcu_barrier_sched(void)
-{
-	wait_rcu_gp(call_rcu_sched);
-}
+extern void rcu_barrier_bh(void);
+extern void rcu_barrier_sched(void);
 
 static inline void synchronize_rcu_expedited(void)
 {
@@ -178,6 +171,14 @@ static inline void rcu_idle_exit(void)
 }
 
 static inline void rcu_irq_enter(void)
+{
+}
+
+static inline void rcu_irq_exit_irqson(void)
+{
+}
+
+static inline void rcu_irq_enter_irqson(void)
 {
 }
 

@@ -996,7 +996,7 @@ static int sde_rotator_init_queue(struct sde_rot_mgr *mgr)
 		snprintf(name, sizeof(name), "rot_commitq_%d_%d",
 				mgr->device->id, i);
 		SDEROT_DBG("work queue name=%s\n", name);
-		init_kthread_worker(&mgr->commitq[i].rot_kw);
+		kthread_init_worker(&mgr->commitq[i].rot_kw);
 		mgr->commitq[i].rot_thread = kthread_run(kthread_worker_fn,
 				&mgr->commitq[i].rot_kw, name);
 		if (IS_ERR(mgr->commitq[i].rot_thread)) {
@@ -1027,7 +1027,7 @@ static int sde_rotator_init_queue(struct sde_rot_mgr *mgr)
 		snprintf(name, sizeof(name), "rot_doneq_%d_%d",
 				mgr->device->id, i);
 		SDEROT_DBG("work queue name=%s\n", name);
-		init_kthread_worker(&mgr->doneq[i].rot_kw);
+		kthread_init_worker(&mgr->doneq[i].rot_kw);
 		mgr->doneq[i].rot_thread = kthread_run(kthread_worker_fn,
 				&mgr->doneq[i].rot_kw, name);
 		if (IS_ERR(mgr->doneq[i].rot_thread)) {
@@ -1058,7 +1058,7 @@ static void sde_rotator_deinit_queue(struct sde_rot_mgr *mgr)
 	if (mgr->commitq) {
 		for (i = 0; i < mgr->queue_count; i++) {
 			if (mgr->commitq[i].rot_thread) {
-				flush_kthread_worker(&mgr->commitq[i].rot_kw);
+				kthread_flush_worker(&mgr->commitq[i].rot_kw);
 				kthread_stop(mgr->commitq[i].rot_thread);
 			}
 		}
@@ -1068,7 +1068,7 @@ static void sde_rotator_deinit_queue(struct sde_rot_mgr *mgr)
 	if (mgr->doneq) {
 		for (i = 0; i < mgr->queue_count; i++) {
 			if (mgr->doneq[i].rot_thread) {
-				flush_kthread_worker(&mgr->doneq[i].rot_kw);
+				kthread_flush_worker(&mgr->doneq[i].rot_kw);
 				kthread_stop(mgr->doneq[i].rot_thread);
 			}
 		}
@@ -1193,7 +1193,7 @@ void sde_rotator_queue_request(struct sde_rot_mgr *mgr,
 
 		if (entry->item.ts)
 			entry->item.ts[SDE_ROTATOR_TS_QUEUE] = ktime_get();
-		queue_kthread_work(&queue->rot_kw, &entry->commit_work);
+		kthread_queue_work(&queue->rot_kw, &entry->commit_work);
 	}
 }
 
@@ -1500,7 +1500,7 @@ static void sde_rotator_commit_handler(struct kthread_work *work)
 	if (entry->item.ts)
 		entry->item.ts[SDE_ROTATOR_TS_FLUSH] = ktime_get();
 
-	queue_kthread_work(&entry->doneq->rot_kw, &entry->done_work);
+	kthread_queue_work(&entry->doneq->rot_kw, &entry->done_work);
 	sde_rot_mgr_unlock(mgr);
 	return;
 error:
@@ -1513,7 +1513,7 @@ get_hw_res_err:
 	atomic_dec(&request->pending_count);
 	atomic_inc(&request->failed_count);
 	if (request->retire_kw && request->retire_work)
-		queue_kthread_work(request->retire_kw, request->retire_work);
+		kthread_queue_work(request->retire_kw, request->retire_work);
 	sde_rot_mgr_unlock(mgr);
 }
 
@@ -1586,7 +1586,7 @@ static void sde_rotator_done_handler(struct kthread_work *work)
 	sde_rotator_release_entry(mgr, entry);
 	atomic_dec(&request->pending_count);
 	if (request->retire_kw && request->retire_work)
-		queue_kthread_work(request->retire_kw, request->retire_work);
+		kthread_queue_work(request->retire_kw, request->retire_work);
 	if (entry->item.ts)
 		entry->item.ts[SDE_ROTATOR_TS_RETIRE] = ktime_get();
 	sde_rot_mgr_unlock(mgr);
@@ -1952,9 +1952,9 @@ static int sde_rotator_add_request(struct sde_rot_mgr *mgr,
 
 		entry->request = req;
 
-		init_kthread_work(&entry->commit_work,
+		kthread_init_work(&entry->commit_work,
 				sde_rotator_commit_handler);
-		init_kthread_work(&entry->done_work,
+		kthread_init_work(&entry->done_work,
 				sde_rotator_done_handler);
 		SDEROT_DBG("Entry added. wbidx=%u, src{%u,%u,%u,%u}f=%u\n"
 			"dst{%u,%u,%u,%u}f=%u session_id=%u\n", item->wb_idx,
@@ -2004,9 +2004,9 @@ static void sde_rotator_cancel_request(struct sde_rot_mgr *mgr,
 		for (i = req->count - 1; i >= 0; i--) {
 			entry = req->entries + i;
 			if (entry->commitq)
-				flush_kthread_worker(&entry->commitq->rot_kw);
+				kthread_flush_worker(&entry->commitq->rot_kw);
 			if (entry->doneq)
-				flush_kthread_worker(&entry->doneq->rot_kw);
+				kthread_flush_worker(&entry->doneq->rot_kw);
 		}
 		sde_rot_mgr_lock(mgr);
 		SDEROT_DBG("cancel work done\n");
@@ -2129,8 +2129,8 @@ static int sde_rotator_open_session(struct sde_rot_mgr *mgr,
 	if (!perf)
 		return -ENOMEM;
 
-	perf->work_distribution = devm_kzalloc(&mgr->pdev->dev,
-		sizeof(u32) * mgr->queue_count, GFP_KERNEL);
+	perf->work_distribution = devm_kcalloc(&mgr->pdev->dev,
+		mgr->queue_count, sizeof(u32), GFP_KERNEL);
 	if (!perf->work_distribution) {
 		ret = -ENOMEM;
 		goto alloc_err;
@@ -2542,7 +2542,7 @@ static int sde_rotator_get_dt_vreg_data(struct device *dev,
 	struct device_node *of_node = NULL;
 	int dt_vreg_total = 0;
 	int i;
-	int rc;
+	int rc ={ 0 };
 
 	if (!dev || !mp) {
 		SDEROT_ERR("%s: invalid input\n", __func__);
@@ -2558,8 +2558,9 @@ static int sde_rotator_get_dt_vreg_data(struct device *dev,
 		return 0;
 	}
 	mp->num_vreg = dt_vreg_total;
-	mp->vreg_config = devm_kzalloc(dev, sizeof(struct sde_vreg) *
-		dt_vreg_total, GFP_KERNEL);
+	mp->vreg_config = devm_kcalloc(dev,
+				       dt_vreg_total, sizeof(struct sde_vreg),
+				       GFP_KERNEL);
 	if (!mp->vreg_config)
 		return -ENOMEM;
 
@@ -2677,8 +2678,8 @@ static int sde_rotator_parse_dt_clk(struct platform_device *pdev,
 	}
 
 	mgr->num_rot_clk = num_clk;
-	mgr->rot_clk = devm_kzalloc(&pdev->dev,
-			sizeof(struct sde_rot_clk) * mgr->num_rot_clk,
+	mgr->rot_clk = devm_kcalloc(&pdev->dev,
+			mgr->num_rot_clk, sizeof(struct sde_rot_clk),
 			GFP_KERNEL);
 	if (!mgr->rot_clk) {
 		rc = -ENOMEM;

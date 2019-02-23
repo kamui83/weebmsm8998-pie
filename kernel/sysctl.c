@@ -98,6 +98,10 @@
 #if defined(CONFIG_SYSCTL)
 
 /* External variables not in a header file. */
+#ifdef CONFIG_USB
+int deny_new_usb __read_mostly = 0;
+EXPORT_SYMBOL(deny_new_usb);
+#endif
 extern int suid_dumpable;
 #ifdef CONFIG_COREDUMP
 extern int core_uses_pid;
@@ -132,10 +136,7 @@ static int one_hundred = 100;
 #ifdef CONFIG_PRINTK
 static int ten_thousand = 10000;
 #endif
-#ifdef CONFIG_SCHED_HMP
-static int one_thousand = 1000;
-static int max_freq_reporting_policy = FREQ_REPORT_INVALID_POLICY - 1;
-#endif
+static int two_hundred_fifty_five = 255;
 
 /* this is needed for the proc_doulongvec_minmax of vm_dirty_bytes */
 static unsigned long dirty_bytes_min = 2 * PAGE_SIZE;
@@ -151,6 +152,9 @@ static const int cap_last_cap = CAP_LAST_CAP;
 #ifdef CONFIG_DETECT_HUNG_TASK
 static unsigned long hung_task_timeout_max = (LONG_MAX/HZ);
 #endif
+
+int device_sidechannel_restrict __read_mostly = 1;
+EXPORT_SYMBOL(device_sidechannel_restrict);
 
 #ifdef CONFIG_INOTIFY_USER
 #include <linux/inotify.h>
@@ -285,6 +289,15 @@ static int max_extfrag_threshold = 1000;
 
 static struct ctl_table kern_table[] = {
 	{
+		.procname	= "sched_boost",
+		.data		= &sysctl_sched_boost,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sched_boost_handler,
+		.extra1         = &zero,
+		.extra2		= &three,
+	},
+	{
 		.procname	= "sched_child_runs_first",
 		.data		= &sysctl_sched_child_runs_first,
 		.maxlen		= sizeof(unsigned int),
@@ -307,217 +320,6 @@ static struct ctl_table kern_table[] = {
 		.proc_handler   = proc_dointvec,
 	},
 #endif
-#ifdef CONFIG_SCHED_HMP
-	{
-		.procname	= "sched_freq_reporting_policy",
-		.data		= &sysctl_sched_freq_reporting_policy,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &max_freq_reporting_policy,
-	},
-	{
-		.procname	= "sched_freq_inc_notify",
-		.data		= &sysctl_sched_freq_inc_notify,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-	},
-	{
-		.procname	= "sched_freq_dec_notify",
-		.data		= &sysctl_sched_freq_dec_notify,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-	},
-	{
-		.procname       = "sched_cpu_high_irqload",
-		.data           = &sysctl_sched_cpu_high_irqload,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
-	},
-	{
-		.procname       = "sched_ravg_hist_size",
-		.data           = &sysctl_sched_ravg_hist_size,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = sched_window_update_handler,
-	},
-	{
-		.procname       = "sched_window_stats_policy",
-		.data           = &sysctl_sched_window_stats_policy,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = sched_window_update_handler,
-	},
-	{
-		.procname	= "sched_spill_load",
-		.data		= &sysctl_sched_spill_load_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_hmp_proc_update_handler,
-		.extra1		= &zero,
-		.extra2		= &one_hundred,
-	},
-	{
-		.procname	= "sched_spill_nr_run",
-		.data		= &sysctl_sched_spill_nr_run,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-	},
-	{
-		.procname	= "sched_upmigrate",
-		.data		= &sysctl_sched_upmigrate_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_hmp_proc_update_handler,
-		.extra1		= &zero,
-		.extra2		= &one_hundred,
-	},
-	{
-		.procname	= "sched_downmigrate",
-		.data		= &sysctl_sched_downmigrate_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_hmp_proc_update_handler,
-		.extra1		= &zero,
-		.extra2		= &one_hundred,
-	},
-	{
-		.procname	= "sched_group_upmigrate",
-		.data		= &sysctl_sched_group_upmigrate_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_hmp_proc_update_handler,
-		.extra1		= &zero,
-	},
-	{
-		.procname	= "sched_group_downmigrate",
-		.data		= &sysctl_sched_group_downmigrate_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_hmp_proc_update_handler,
-		.extra1		= &zero,
-	},
-	{
-		.procname	= "sched_init_task_load",
-		.data		= &sysctl_sched_init_task_load_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_hmp_proc_update_handler,
-		.extra1		= &zero,
-		.extra2		= &one_hundred,
-	},
-	{
-		.procname	= "sched_select_prev_cpu_us",
-		.data		= &sysctl_sched_select_prev_cpu_us,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler   = sched_hmp_proc_update_handler,
-		.extra1		= &zero,
-	},
-	{
-		.procname	= "sched_restrict_cluster_spill",
-		.data		= &sysctl_sched_restrict_cluster_spill,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
-	},
-	{
-		.procname	= "sched_small_wakee_task_load",
-		.data		= &sysctl_sched_small_wakee_task_load_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler   = sched_hmp_proc_update_handler,
-		.extra1		= &zero,
-		.extra2		= &one_hundred,
-	},
-	{
-		.procname	= "sched_big_waker_task_load",
-		.data		= &sysctl_sched_big_waker_task_load_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler   = sched_hmp_proc_update_handler,
-		.extra1		= &zero,
-		.extra2		= &one_hundred,
-	},
-	{
-		.procname	= "sched_prefer_sync_wakee_to_waker",
-		.data		= &sysctl_sched_prefer_sync_wakee_to_waker,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-		.extra2		= &one,
-	},
-	{
-		.procname       = "sched_enable_thread_grouping",
-		.data           = &sysctl_sched_enable_thread_grouping,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
-	},
-	{
-		.procname	= "sched_pred_alert_freq",
-		.data		= &sysctl_sched_pred_alert_freq,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec_minmax,
-		.extra1		= &zero,
-	},
-	{
-		.procname       = "sched_freq_aggregate",
-		.data           = &sysctl_sched_freq_aggregate,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = sched_window_update_handler,
-	},
-	{
-		.procname	= "sched_freq_aggregate_threshold",
-		.data		= &sysctl_sched_freq_aggregate_threshold_pct,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_hmp_proc_update_handler,
-		.extra1		= &zero,
-		/*
-		 * Special handling for sched_freq_aggregate_threshold_pct
-		 * which can be greater than 100. Use 1000 as an upper bound
-		 * value which works for all practical use cases.
-		 */
-		.extra2		= &one_thousand,
-	},
-	{
-		.procname	= "sched_boost",
-		.data		= &sysctl_sched_boost,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= sched_boost_handler,
-		.extra1         = &zero,
-		.extra2		= &three,
-	},
-	{
-		.procname	= "sched_short_burst_ns",
-		.data		= &sysctl_sched_short_burst,
-		.maxlen		= sizeof(unsigned int),
-		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
-	},
-	{
-		.procname       = "sched_short_sleep_ns",
-		.data           = &sysctl_sched_short_sleep,
-		.maxlen         = sizeof(unsigned int),
-		.mode           = 0644,
-		.proc_handler   = proc_dointvec,
-	},
-#endif	/* CONFIG_SCHED_HMP */
 #ifdef CONFIG_SCHED_DEBUG
 	{
 		.procname	= "sched_min_granularity_ns",
@@ -537,6 +339,36 @@ static struct ctl_table kern_table[] = {
 		.extra1		= &min_sched_granularity_ns,
 		.extra2		= &max_sched_granularity_ns,
 	},
+#ifdef CONFIG_SCHED_WALT
+	{
+		.procname	= "sched_use_walt_cpu_util",
+		.data		= &sysctl_sched_use_walt_cpu_util,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "sched_use_walt_task_util",
+		.data		= &sysctl_sched_use_walt_task_util,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "sched_walt_init_task_load_pct",
+		.data		= &sysctl_sched_walt_init_task_load_pct,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+	{
+		.procname	= "sched_walt_cpu_high_irqload",
+		.data		= &sysctl_sched_walt_cpu_high_irqload,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec,
+	},
+#endif
 	{
 		.procname	= "sched_sync_hint_enable",
 		.data		= &sysctl_sched_sync_hint_enable,
@@ -599,6 +431,17 @@ static struct ctl_table kern_table[] = {
 		.mode		= 0644,
 		.proc_handler	= proc_dointvec,
 	},
+#ifdef CONFIG_SCHEDSTATS
+	{
+		.procname	= "sched_schedstats",
+		.data		= NULL,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= sysctl_schedstats,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+#endif /* CONFIG_SCHEDSTATS */
 #endif /* CONFIG_SMP */
 #ifdef CONFIG_NUMA_BALANCING
 	{
@@ -698,6 +541,31 @@ static struct ctl_table kern_table[] = {
 		.extra2		= &one_hundred,
 	},
 #endif
+	{
+		.procname	= "sched_lib_name",
+		.data		= sched_lib_name,
+		.maxlen		= LIB_PATH_LENGTH,
+		.mode		= 0644,
+		.proc_handler	= proc_dostring,
+	},
+	{
+		.procname	= "sched_lib_mask_check",
+		.data		= &sched_lib_mask_check,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &two_hundred_fifty_five,
+	},
+	{
+		.procname	= "sched_lib_mask_force",
+		.data		= &sched_lib_mask_force,
+		.maxlen		= sizeof(unsigned int),
+		.mode		= 0644,
+		.proc_handler	= proc_douintvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &two_hundred_fifty_five,
+	},
 #ifdef CONFIG_PROVE_LOCKING
 	{
 		.procname	= "prove_locking",
@@ -769,7 +637,7 @@ static struct ctl_table kern_table[] = {
 		.data		= &latencytop_enabled,
 		.maxlen		= sizeof(int),
 		.mode		= 0644,
-		.proc_handler	= proc_dointvec,
+		.proc_handler	= sysctl_latencytop,
 	},
 #endif
 #ifdef CONFIG_BLK_DEV_INITRD
@@ -1081,6 +949,26 @@ static struct ctl_table kern_table[] = {
 		.extra2		= &two,
 	},
 #endif
+#ifdef CONFIG_USB
+	{
+		.procname	= "deny_new_usb",
+		.data		= &deny_new_usb,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax_sysadmin,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
+#endif
+	{
+		.procname	= "device_sidechannel_restrict",
+		.data		= &device_sidechannel_restrict,
+		.maxlen		= sizeof(int),
+		.mode		= 0644,
+		.proc_handler	= proc_dointvec_minmax_sysadmin,
+		.extra1		= &zero,
+		.extra2		= &one,
+	},
 	{
 		.procname	= "ngroups_max",
 		.data		= &ngroups_max,
@@ -2045,6 +1933,24 @@ static struct ctl_table fs_table[] = {
 		.extra2		= &one,
 	},
 	{
+		.procname	= "protected_fifos",
+		.data		= &sysctl_protected_fifos,
+		.maxlen		= sizeof(int),
+		.mode		= 0600,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &two,
+	},
+	{
+		.procname	= "protected_regular",
+		.data		= &sysctl_protected_regular,
+		.maxlen		= sizeof(int),
+		.mode		= 0600,
+		.proc_handler	= proc_dointvec_minmax,
+		.extra1		= &zero,
+		.extra2		= &two,
+	},
+	{
 		.procname	= "suid_dumpable",
 		.data		= &suid_dumpable,
 		.maxlen		= sizeof(int),
@@ -2214,6 +2120,32 @@ static void warn_sysctl_write(struct ctl_table *table)
 }
 
 /**
+ * proc_first_pos_non_zero_ignore - check if firs position is allowed
+ * @ppos: file position
+ * @table: the sysctl table
+ *
+ * Returns true if the first position is non-zero and the sysctl_writes_strict
+ * mode indicates this is not allowed for numeric input types. String proc
+ * hadlers can ignore the return value.
+ */
+static bool proc_first_pos_non_zero_ignore(loff_t *ppos,
+					   struct ctl_table *table)
+{
+	if (!*ppos)
+		return false;
+
+	switch (sysctl_writes_strict) {
+	case SYSCTL_WRITES_STRICT:
+		return true;
+	case SYSCTL_WRITES_WARN:
+		warn_sysctl_write(table);
+		return false;
+	default:
+		return false;
+	}
+}
+
+/**
  * proc_dostring - read a string sysctl
  * @table: the sysctl table
  * @write: %TRUE if this is a write to the sysctl file
@@ -2233,8 +2165,8 @@ static void warn_sysctl_write(struct ctl_table *table)
 int proc_dostring(struct ctl_table *table, int write,
 		  void __user *buffer, size_t *lenp, loff_t *ppos)
 {
-	if (write && *ppos && sysctl_writes_strict == SYSCTL_WRITES_WARN)
-		warn_sysctl_write(table);
+	if (write)
+		proc_first_pos_non_zero_ignore(ppos, table);
 
 	return _proc_do_string((char *)(table->data), table->maxlen, write,
 			       (char __user *)buffer, lenp, ppos);
@@ -2384,19 +2316,18 @@ static int do_proc_dointvec_conv(bool *negp, unsigned long *lvalp,
 	return 0;
 }
 
-static int do_proc_douintvec_conv(bool *negp, unsigned long *lvalp,
-				 int *valp,
-				 int write, void *data)
+static int do_proc_douintvec_conv(unsigned long *lvalp,
+				  unsigned int *valp,
+				  int write, void *data)
 {
 	if (write) {
-		if (*negp)
+		if (*lvalp > UINT_MAX)
 			return -EINVAL;
 		if (*lvalp > UINT_MAX)
 			return -EINVAL;
 		*valp = *lvalp;
 	} else {
 		unsigned int val = *valp;
-		*negp = false;
 		*lvalp = (unsigned long)val;
 	}
 	return 0;
@@ -2412,9 +2343,8 @@ static int __do_proc_dointvec(void *tbl_data, struct ctl_table *table,
 		  void *data)
 {
 	int *i, vleft, first = 1, err = 0;
-	unsigned long page = 0;
 	size_t left;
-	char *kbuf;
+	char *kbuf, *p;
 	
 	if (!tbl_data || !table->maxlen || !*lenp || (*ppos && !write)) {
 		*lenp = 0;
@@ -2429,29 +2359,14 @@ static int __do_proc_dointvec(void *tbl_data, struct ctl_table *table,
 		conv = do_proc_dointvec_conv;
 
 	if (write) {
-		if (*ppos) {
-			switch (sysctl_writes_strict) {
-			case SYSCTL_WRITES_STRICT:
-				goto out;
-			case SYSCTL_WRITES_WARN:
-				warn_sysctl_write(table);
-				break;
-			default:
-				break;
-			}
-		}
+		if (proc_first_pos_non_zero_ignore(ppos, table))
+			goto out;
 
 		if (left > PAGE_SIZE - 1)
 			left = PAGE_SIZE - 1;
-		page = __get_free_page(GFP_TEMPORARY);
-		kbuf = (char *) page;
-		if (!kbuf)
-			return -ENOMEM;
-		if (copy_from_user(kbuf, buffer, left)) {
-			err = -EFAULT;
-			goto free;
-		}
-		kbuf[left] = 0;
+		p = kbuf = memdup_user_nul(buffer, left);
+		if (IS_ERR(kbuf))
+			return PTR_ERR(kbuf);
 	}
 
 	for (; left && vleft--; i++, first=0) {
@@ -2459,11 +2374,11 @@ static int __do_proc_dointvec(void *tbl_data, struct ctl_table *table,
 		bool neg;
 
 		if (write) {
-			left -= proc_skip_spaces(&kbuf);
+			left -= proc_skip_spaces(&p);
 
 			if (!left)
 				break;
-			err = proc_get_long(&kbuf, &left, &lval, &neg,
+			err = proc_get_long(&p, &left, &lval, &neg,
 					     proc_wspace_sep,
 					     sizeof(proc_wspace_sep), NULL);
 			if (err)
@@ -2490,10 +2405,9 @@ static int __do_proc_dointvec(void *tbl_data, struct ctl_table *table,
 	if (!write && !first && left && !err)
 		err = proc_put_char(&buffer, &left, '\n');
 	if (write && !err && left)
-		left -= proc_skip_spaces(&kbuf);
-free:
+		left -= proc_skip_spaces(&p);
 	if (write) {
-		free_page(page);
+		kfree(kbuf);
 		if (first)
 			return err ? : -EINVAL;
 	}
@@ -2511,6 +2425,146 @@ static int do_proc_dointvec(struct ctl_table *table, int write,
 {
 	return __do_proc_dointvec(table->data, table, write,
 			buffer, lenp, ppos, conv, data);
+}
+
+static int do_proc_douintvec_w(unsigned int *tbl_data,
+			       struct ctl_table *table,
+			       void __user *buffer,
+			       size_t *lenp, loff_t *ppos,
+			       int (*conv)(unsigned long *lvalp,
+					   unsigned int *valp,
+					   int write, void *data),
+			       void *data)
+{
+	unsigned long lval;
+	int err = 0;
+	size_t left;
+	bool neg;
+	char *kbuf = NULL, *p;
+
+	left = *lenp;
+
+	if (proc_first_pos_non_zero_ignore(ppos, table))
+		goto bail_early;
+
+	if (left > PAGE_SIZE - 1)
+		left = PAGE_SIZE - 1;
+
+	p = kbuf = memdup_user_nul(buffer, left);
+	if (IS_ERR(kbuf))
+		return -EINVAL;
+
+	left -= proc_skip_spaces(&p);
+	if (!left) {
+		err = -EINVAL;
+		goto out_free;
+	}
+
+	err = proc_get_long(&p, &left, &lval, &neg,
+			     proc_wspace_sep,
+			     sizeof(proc_wspace_sep), NULL);
+	if (err || neg) {
+		err = -EINVAL;
+		goto out_free;
+	}
+
+	if (conv(&lval, tbl_data, 1, data)) {
+		err = -EINVAL;
+		goto out_free;
+	}
+
+	if (!err && left)
+		left -= proc_skip_spaces(&p);
+
+out_free:
+	kfree(kbuf);
+	if (err)
+		return -EINVAL;
+
+	return 0;
+
+	/* This is in keeping with old __do_proc_dointvec() */
+bail_early:
+	*ppos += *lenp;
+	return err;
+}
+
+static int do_proc_douintvec_r(unsigned int *tbl_data, void __user *buffer,
+			       size_t *lenp, loff_t *ppos,
+			       int (*conv)(unsigned long *lvalp,
+					   unsigned int *valp,
+					   int write, void *data),
+			       void *data)
+{
+	unsigned long lval;
+	int err = 0;
+	size_t left;
+
+	left = *lenp;
+
+	if (conv(&lval, tbl_data, 0, data)) {
+		err = -EINVAL;
+		goto out;
+	}
+
+	err = proc_put_long(&buffer, &left, lval, false);
+	if (err || !left)
+		goto out;
+
+	err = proc_put_char(&buffer, &left, '\n');
+
+out:
+	*lenp -= left;
+	*ppos += *lenp;
+
+	return err;
+}
+
+static int __do_proc_douintvec(void *tbl_data, struct ctl_table *table,
+			       int write, void __user *buffer,
+			       size_t *lenp, loff_t *ppos,
+			       int (*conv)(unsigned long *lvalp,
+					   unsigned int *valp,
+					   int write, void *data),
+			       void *data)
+{
+	unsigned int *i, vleft;
+
+	if (!tbl_data || !table->maxlen || !*lenp || (*ppos && !write)) {
+		*lenp = 0;
+		return 0;
+	}
+
+	i = (unsigned int *) tbl_data;
+	vleft = table->maxlen / sizeof(*i);
+
+	/*
+	 * Arrays are not supported, keep this simple. *Do not* add
+	 * support for them.
+	 */
+	if (vleft != 1) {
+		*lenp = 0;
+		return -EINVAL;
+	}
+
+	if (!conv)
+		conv = do_proc_douintvec_conv;
+
+	if (write)
+		return do_proc_douintvec_w(i, table, buffer, lenp, ppos,
+					   conv, data);
+	return do_proc_douintvec_r(i, buffer, lenp, ppos, conv, data);
+}
+
+static int do_proc_douintvec(struct ctl_table *table, int write,
+			     void __user *buffer, size_t *lenp, loff_t *ppos,
+			     int (*conv)(unsigned long *lvalp,
+					 unsigned int *valp,
+					 int write, void *data),
+			     void *data)
+{
+	return __do_proc_douintvec(table->data, table, write,
+				   buffer, lenp, ppos, conv, data);
 }
 
 /**
@@ -2548,8 +2602,8 @@ int proc_dointvec(struct ctl_table *table, int write,
 int proc_douintvec(struct ctl_table *table, int write,
 		     void __user *buffer, size_t *lenp, loff_t *ppos)
 {
-	return do_proc_dointvec(table, write, buffer, lenp, ppos,
-				do_proc_douintvec_conv, NULL);
+	return do_proc_douintvec(table, write, buffer, lenp, ppos,
+				 do_proc_douintvec_conv, NULL);
 }
 
 /*
@@ -2654,6 +2708,65 @@ int proc_dointvec_minmax(struct ctl_table *table, int write,
 				do_proc_dointvec_minmax_conv, &param);
 }
 
+struct do_proc_douintvec_minmax_conv_param {
+	unsigned int *min;
+	unsigned int *max;
+};
+
+static int do_proc_douintvec_minmax_conv(unsigned long *lvalp,
+					 unsigned int *valp,
+					 int write, void *data)
+{
+	struct do_proc_douintvec_minmax_conv_param *param = data;
+
+	if (write) {
+		unsigned int val = *lvalp;
+
+		if ((param->min && *param->min > val) ||
+		    (param->max && *param->max < val))
+			return -ERANGE;
+
+		if (*lvalp > UINT_MAX)
+			return -EINVAL;
+		*valp = val;
+	} else {
+		unsigned int val = *valp;
+		*lvalp = (unsigned long) val;
+	}
+
+	return 0;
+}
+
+/**
+ * proc_douintvec_minmax - read a vector of unsigned ints with min/max values
+ * @table: the sysctl table
+ * @write: %TRUE if this is a write to the sysctl file
+ * @buffer: the user buffer
+ * @lenp: the size of the user buffer
+ * @ppos: file position
+ *
+ * Reads/writes up to table->maxlen/sizeof(unsigned int) unsigned integer
+ * values from/to the user buffer, treated as an ASCII string. Negative
+ * strings are not allowed.
+ *
+ * This routine will ensure the values are within the range specified by
+ * table->extra1 (min) and table->extra2 (max). There is a final sanity
+ * check for UINT_MAX to avoid having to support wrap around uses from
+ * userspace.
+ *
+ * Returns 0 on success.
+ */
+int proc_douintvec_minmax(struct ctl_table *table, int write,
+			  void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	struct do_proc_douintvec_minmax_conv_param param = {
+		.min = (unsigned int *) table->extra1,
+		.max = (unsigned int *) table->extra2,
+	};
+	return do_proc_douintvec(table, write, buffer, lenp, ppos,
+				 do_proc_douintvec_minmax_conv, &param);
+}
+
 static void validate_coredump_safety(void)
 {
 #ifdef CONFIG_COREDUMP
@@ -2694,9 +2807,8 @@ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table, int 
 {
 	unsigned long *i, *min, *max;
 	int vleft, first = 1, err = 0;
-	unsigned long page = 0;
 	size_t left;
-	char *kbuf;
+	char *kbuf, *p;
 
 	if (!data || !table->maxlen || !*lenp || (*ppos && !write)) {
 		*lenp = 0;
@@ -2710,29 +2822,14 @@ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table, int 
 	left = *lenp;
 
 	if (write) {
-		if (*ppos) {
-			switch (sysctl_writes_strict) {
-			case SYSCTL_WRITES_STRICT:
-				goto out;
-			case SYSCTL_WRITES_WARN:
-				warn_sysctl_write(table);
-				break;
-			default:
-				break;
-			}
-		}
+		if (proc_first_pos_non_zero_ignore(ppos, table))
+			goto out;
 
 		if (left > PAGE_SIZE - 1)
 			left = PAGE_SIZE - 1;
-		page = __get_free_page(GFP_TEMPORARY);
-		kbuf = (char *) page;
-		if (!kbuf)
-			return -ENOMEM;
-		if (copy_from_user(kbuf, buffer, left)) {
-			err = -EFAULT;
-			goto free;
-		}
-		kbuf[left] = 0;
+		p = kbuf = memdup_user_nul(buffer, left);
+		if (IS_ERR(kbuf))
+			return PTR_ERR(kbuf);
 	}
 
 	for (; left && vleft--; i++, first = 0) {
@@ -2741,9 +2838,9 @@ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table, int 
 		if (write) {
 			bool neg;
 
-			left -= proc_skip_spaces(&kbuf);
+			left -= proc_skip_spaces(&p);
 
-			err = proc_get_long(&kbuf, &left, &val, &neg,
+			err = proc_get_long(&p, &left, &val, &neg,
 					     proc_wspace_sep,
 					     sizeof(proc_wspace_sep), NULL);
 			if (err)
@@ -2770,10 +2867,9 @@ static int __do_proc_doulongvec_minmax(void *data, struct ctl_table *table, int 
 	if (!write && !first && left && !err)
 		err = proc_put_char(&buffer, &left, '\n');
 	if (write && !err)
-		left -= proc_skip_spaces(&kbuf);
-free:
+		left -= proc_skip_spaces(&p);
 	if (write) {
-		free_page(page);
+		kfree(kbuf);
 		if (first)
 			return err ? : -EINVAL;
 	}
@@ -3035,34 +3131,28 @@ int proc_do_large_bitmap(struct ctl_table *table, int write,
 	}
 
 	if (write) {
-		unsigned long page = 0;
-		char *kbuf;
+		char *kbuf, *p;
 
 		if (left > PAGE_SIZE - 1)
 			left = PAGE_SIZE - 1;
 
-		page = __get_free_page(GFP_TEMPORARY);
-		kbuf = (char *) page;
-		if (!kbuf)
-			return -ENOMEM;
-		if (copy_from_user(kbuf, buffer, left)) {
-			free_page(page);
-			return -EFAULT;
-                }
-		kbuf[left] = 0;
+		p = kbuf = memdup_user_nul(buffer, left);
+		if (IS_ERR(kbuf))
+			return PTR_ERR(kbuf);
 
-		tmp_bitmap = kzalloc(BITS_TO_LONGS(bitmap_len) * sizeof(unsigned long),
+		tmp_bitmap = kcalloc(BITS_TO_LONGS(bitmap_len),
+				     sizeof(unsigned long),
 				     GFP_KERNEL);
 		if (!tmp_bitmap) {
-			free_page(page);
+			kfree(kbuf);
 			return -ENOMEM;
 		}
-		proc_skip_char(&kbuf, &left, '\n');
+		proc_skip_char(&p, &left, '\n');
 		while (!err && left) {
 			unsigned long val_a, val_b;
 			bool neg;
 
-			err = proc_get_long(&kbuf, &left, &val_a, &neg, tr_a,
+			err = proc_get_long(&p, &left, &val_a, &neg, tr_a,
 					     sizeof(tr_a), &c);
 			if (err)
 				break;
@@ -3073,12 +3163,12 @@ int proc_do_large_bitmap(struct ctl_table *table, int write,
 
 			val_b = val_a;
 			if (left) {
-				kbuf++;
+				p++;
 				left--;
 			}
 
 			if (c == '-') {
-				err = proc_get_long(&kbuf, &left, &val_b,
+				err = proc_get_long(&p, &left, &val_b,
 						     &neg, tr_b, sizeof(tr_b),
 						     &c);
 				if (err)
@@ -3089,16 +3179,16 @@ int proc_do_large_bitmap(struct ctl_table *table, int write,
 					break;
 				}
 				if (left) {
-					kbuf++;
+					p++;
 					left--;
 				}
 			}
 
 			bitmap_set(tmp_bitmap, val_a, val_b - val_a + 1);
 			first = 0;
-			proc_skip_char(&kbuf, &left, '\n');
+			proc_skip_char(&p, &left, '\n');
 		}
-		free_page(page);
+		kfree(kbuf);
 	} else {
 		unsigned long bit_a, bit_b = 0;
 
@@ -3175,6 +3265,12 @@ int proc_dointvec_minmax(struct ctl_table *table, int write,
 	return -ENOSYS;
 }
 
+int proc_douintvec_minmax(struct ctl_table *table, int write,
+			  void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	return -ENOSYS;
+}
+
 int proc_dointvec_jiffies(struct ctl_table *table, int write,
 		    void __user *buffer, size_t *lenp, loff_t *ppos)
 {
@@ -3217,6 +3313,7 @@ EXPORT_SYMBOL(proc_dointvec);
 EXPORT_SYMBOL(proc_douintvec);
 EXPORT_SYMBOL(proc_dointvec_jiffies);
 EXPORT_SYMBOL(proc_dointvec_minmax);
+EXPORT_SYMBOL_GPL(proc_douintvec_minmax);
 EXPORT_SYMBOL(proc_dointvec_userhz_jiffies);
 EXPORT_SYMBOL(proc_dointvec_ms_jiffies);
 EXPORT_SYMBOL(proc_dostring);

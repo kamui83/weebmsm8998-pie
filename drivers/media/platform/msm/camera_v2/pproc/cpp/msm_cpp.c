@@ -1,4 +1,4 @@
-/* Copyright (c) 2013-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2013-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -449,11 +449,6 @@ static unsigned long msm_cpp_queue_buffer_info(struct cpp_device *cpp_dev,
 	buff->map_info.buff_info = *buffer_info;
 	buff->map_info.buf_fd = buffer_info->fd;
 
-	trace_printk("fd %d index %d native_buff %d ssid %d %d\n",
-		buffer_info->fd, buffer_info->index,
-		buffer_info->native_buff, buff_queue->session_id,
-		buff_queue->stream_id);
-
 	if (buff_queue->security_mode == SECURE_MODE)
 		rc = cam_smmu_get_stage2_phy_addr(cpp_dev->iommu_hdl,
 			buffer_info->fd, CAM_SMMU_MAP_RW,
@@ -483,11 +478,6 @@ static void msm_cpp_dequeue_buffer_info(struct cpp_device *cpp_dev,
 	struct msm_cpp_buffer_map_list_t *buff)
 {
 	int ret = -1;
-
-	trace_printk("fd %d index %d native_buf %d ssid %d %d\n",
-		buff->map_info.buf_fd, buff->map_info.buff_info.index,
-		buff->map_info.buff_info.native_buff, buff_queue->session_id,
-		buff_queue->stream_id);
 
 	if (buff_queue->security_mode == SECURE_MODE)
 		ret = cam_smmu_put_stage2_phy_addr(cpp_dev->iommu_hdl,
@@ -624,9 +614,9 @@ static int32_t msm_cpp_create_buff_queue(struct cpp_device *cpp_dev,
 {
 	struct msm_cpp_buff_queue_info_t *buff_queue;
 
-	buff_queue = kzalloc(
-		sizeof(struct msm_cpp_buff_queue_info_t) * num_buffq,
-		GFP_KERNEL);
+	buff_queue = kcalloc(num_buffq,
+			     sizeof(struct msm_cpp_buff_queue_info_t),
+			     GFP_KERNEL);
 	if (!buff_queue) {
 		pr_err("Buff queue allocation failure\n");
 		return -ENOMEM;
@@ -958,9 +948,14 @@ static irqreturn_t msm_cpp_irq(int irq_num, void *data)
 	if (irq_status & 0x8) {
 		tx_level = msm_camera_io_r(cpp_dev->base +
 			MSM_CPP_MICRO_FIFO_TX_STAT) >> 2;
-		for (i = 0; i < tx_level; i++) {
-			tx_fifo[i] = msm_camera_io_r(cpp_dev->base +
-				MSM_CPP_MICRO_FIFO_TX_DATA);
+		if (tx_level < MSM_CPP_TX_FIFO_LEVEL) {
+			for (i = 0; i < tx_level; i++) {
+				tx_fifo[i] = msm_camera_io_r(cpp_dev->base +
+					MSM_CPP_MICRO_FIFO_TX_DATA);
+			}
+		} else {
+			pr_err("Fatal invalid tx level %d", tx_level);
+			goto err;
 		}
 		spin_lock_irqsave(&cpp_dev->tasklet_lock, flags);
 		queue_cmd = &cpp_dev->tasklet_queue_cmd[cpp_dev->taskletq_idx];
@@ -1015,6 +1010,7 @@ static irqreturn_t msm_cpp_irq(int irq_num, void *data)
 		pr_debug("DEBUG_R1: 0x%x\n",
 			msm_camera_io_r(cpp_dev->base + 0x8C));
 	}
+err:
 	msm_camera_io_w(irq_status, cpp_dev->base + MSM_CPP_MICRO_IRQGEN_CLR);
 	return IRQ_HANDLED;
 }
@@ -2179,8 +2175,8 @@ static struct msm_cpp_frame_info_t *msm_cpp_get_frame(
 		goto frame_err;
 	}
 
-	cpp_frame_msg = kzalloc(sizeof(uint32_t) * new_frame->msg_len,
-		GFP_KERNEL);
+	cpp_frame_msg = kcalloc(new_frame->msg_len, sizeof(uint32_t),
+				GFP_KERNEL);
 	if (!cpp_frame_msg) {
 		pr_err("Insufficient memory\n");
 		goto frame_err;
@@ -3301,9 +3297,9 @@ long msm_cpp_subdev_ioctl(struct v4l2_subdev *sd,
 
 		if (u_stream_buff_info->num_buffs != 0) {
 			k_stream_buff_info.buffer_info =
-				kzalloc(k_stream_buff_info.num_buffs *
-				sizeof(struct msm_cpp_buffer_info_t),
-				GFP_KERNEL);
+				kcalloc(k_stream_buff_info.num_buffs,
+					sizeof(struct msm_cpp_buffer_info_t),
+					GFP_KERNEL);
 			if (ZERO_OR_NULL_PTR(k_stream_buff_info.buffer_info)) {
 				pr_err("%s:%d: malloc error\n",
 					__func__, __LINE__);
@@ -3925,8 +3921,8 @@ static struct msm_cpp_frame_info_t *get_64bit_cpp_frame_from_compat(
 		goto frame_err;
 	}
 
-	cpp_frame_msg = kzalloc(sizeof(uint32_t)*new_frame->msg_len,
-		GFP_KERNEL);
+	cpp_frame_msg = kcalloc(new_frame->msg_len, sizeof(uint32_t),
+				GFP_KERNEL);
 	if (!cpp_frame_msg) {
 		pr_err("Insufficient memory\n");
 		goto frame_err;

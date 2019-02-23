@@ -509,11 +509,19 @@ static void *timer_debug_hint(void *addr)
 	return ((struct timer_list *) addr)->function;
 }
 
+static bool timer_is_static_object(void *addr)
+{
+	struct timer_list *timer = addr;
+
+	return (timer->entry.pprev == NULL &&
+		timer->entry.next == TIMER_ENTRY_STATIC);
+}
+
 /*
  * fixup_init is called when:
  * - an active object is initialized
  */
-static int timer_fixup_init(void *addr, enum debug_obj_state state)
+static bool timer_fixup_init(void *addr, enum debug_obj_state state)
 {
 	struct timer_list *timer = addr;
 
@@ -521,9 +529,9 @@ static int timer_fixup_init(void *addr, enum debug_obj_state state)
 	case ODEBUG_STATE_ACTIVE:
 		del_timer_sync(timer);
 		debug_object_init(timer, &timer_debug_descr);
-		return 1;
+		return true;
 	default:
-		return 0;
+		return false;
 	}
 }
 
@@ -536,36 +544,22 @@ static void stub_timer(unsigned long data)
 /*
  * fixup_activate is called when:
  * - an active object is activated
- * - an unknown object is activated (might be a statically initialized object)
+ * - an unknown non-static object is activated
  */
-static int timer_fixup_activate(void *addr, enum debug_obj_state state)
+static bool timer_fixup_activate(void *addr, enum debug_obj_state state)
 {
 	struct timer_list *timer = addr;
 
 	switch (state) {
-
 	case ODEBUG_STATE_NOTAVAILABLE:
-		/*
-		 * This is not really a fixup. The timer was
-		 * statically initialized. We just make sure that it
-		 * is tracked in the object tracker.
-		 */
-		if (timer->entry.pprev == NULL &&
-		    timer->entry.next == TIMER_ENTRY_STATIC) {
-			debug_object_init(timer, &timer_debug_descr);
-			debug_object_activate(timer, &timer_debug_descr);
-			return 0;
-		} else {
-			setup_timer(timer, stub_timer, 0);
-			return 1;
-		}
-		return 0;
+		setup_timer(timer, stub_timer, 0);
+		return true;
 
 	case ODEBUG_STATE_ACTIVE:
 		WARN_ON(1);
 
 	default:
-		return 0;
+		return false;
 	}
 }
 
@@ -573,7 +567,7 @@ static int timer_fixup_activate(void *addr, enum debug_obj_state state)
  * fixup_free is called when:
  * - an active object is freed
  */
-static int timer_fixup_free(void *addr, enum debug_obj_state state)
+static bool timer_fixup_free(void *addr, enum debug_obj_state state)
 {
 	struct timer_list *timer = addr;
 
@@ -581,9 +575,9 @@ static int timer_fixup_free(void *addr, enum debug_obj_state state)
 	case ODEBUG_STATE_ACTIVE:
 		del_timer_sync(timer);
 		debug_object_free(timer, &timer_debug_descr);
-		return 1;
+		return true;
 	default:
-		return 0;
+		return false;
 	}
 }
 
@@ -591,32 +585,23 @@ static int timer_fixup_free(void *addr, enum debug_obj_state state)
  * fixup_assert_init is called when:
  * - an untracked/uninit-ed object is found
  */
-static int timer_fixup_assert_init(void *addr, enum debug_obj_state state)
+static bool timer_fixup_assert_init(void *addr, enum debug_obj_state state)
 {
 	struct timer_list *timer = addr;
 
 	switch (state) {
 	case ODEBUG_STATE_NOTAVAILABLE:
-		if (timer->entry.next == TIMER_ENTRY_STATIC) {
-			/*
-			 * This is not really a fixup. The timer was
-			 * statically initialized. We just make sure that it
-			 * is tracked in the object tracker.
-			 */
-			debug_object_init(timer, &timer_debug_descr);
-			return 0;
-		} else {
-			setup_timer(timer, stub_timer, 0);
-			return 1;
-		}
+		setup_timer(timer, stub_timer, 0);
+		return true;
 	default:
-		return 0;
+		return false;
 	}
 }
 
 static struct debug_obj_descr timer_debug_descr = {
 	.name			= "timer_list",
 	.debug_hint		= timer_debug_hint,
+	.is_static_object	= timer_is_static_object,
 	.fixup_init		= timer_fixup_init,
 	.fixup_activate		= timer_fixup_activate,
 	.fixup_free		= timer_fixup_free,
@@ -1146,7 +1131,7 @@ int del_timer_sync(struct timer_list *timer)
 		int ret = try_to_del_timer_sync(timer);
 		if (ret >= 0)
 			return ret;
-		cpu_relax();
+		udelay(1);
 	}
 }
 EXPORT_SYMBOL(del_timer_sync);
@@ -1506,9 +1491,19 @@ SYSCALL_DEFINE1(alarm, unsigned int, seconds)
 
 #endif
 
-static void process_timeout(unsigned long __data)
+/*
+ * Since schedule_timeout()'s timer is defined on the stack, it must store
+ * the target task on the stack as well.
+ */
+struct process_timer {
+	struct timer_list timer;
+	struct task_struct *task;
+};
+
+static void process_timeout(struct timer_list *t)
 {
-	wake_up_process((struct task_struct *)__data);
+	struct process_timer *timeout = from_timer(timeout, t, timer);
+ 	wake_up_process(timeout->task);
 }
 
 /**
@@ -1542,7 +1537,7 @@ static void process_timeout(unsigned long __data)
  */
 signed long __sched schedule_timeout(signed long timeout)
 {
-	struct timer_list timer;
+	struct process_timer timer;
 	unsigned long expire;
 
 	switch (timeout)
@@ -1576,13 +1571,14 @@ signed long __sched schedule_timeout(signed long timeout)
 
 	expire = timeout + jiffies;
 
-	setup_timer_on_stack(&timer, process_timeout, (unsigned long)current);
-	__mod_timer(&timer, expire, false, TIMER_NOT_PINNED);
+	timer.task = current;
+	timer_setup_on_stack(&timer.timer, process_timeout, 0);
+	__mod_timer(&timer.timer, expire, false, TIMER_NOT_PINNED);
 	schedule();
-	del_singleshot_timer_sync(&timer);
+	del_singleshot_timer_sync(&timer.timer);
 
 	/* Remove the timer from the object tracker */
-	destroy_timer_on_stack(&timer);
+	destroy_timer_on_stack(&timer.timer);
 
 	timeout = expire - jiffies;
 

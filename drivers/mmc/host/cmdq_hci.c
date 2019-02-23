@@ -39,7 +39,7 @@
 static int cmdq_halt_poll(struct mmc_host *mmc, bool halt);
 static int cmdq_halt(struct mmc_host *mmc, bool halt);
 
-#ifdef CONFIG_PM_RUNTIME
+#ifdef CONFIG_PM
 static int cmdq_runtime_pm_get(struct cmdq_host *host)
 {
 	return pm_runtime_get_sync(host->mmc->parent);
@@ -1367,8 +1367,9 @@ int cmdq_init(struct cmdq_host *cq_host, struct mmc_host *mmc,
 	mmc->num_cq_slots = NUM_SLOTS;
 	mmc->dcmd_cq_slot = DCMD_SLOT;
 
-	cq_host->mrq_slot = kzalloc(sizeof(cq_host->mrq_slot) *
-				    cq_host->num_slots, GFP_KERNEL);
+	cq_host->mrq_slot = kcalloc(cq_host->num_slots,
+				    sizeof(cq_host->mrq_slot),
+				    GFP_KERNEL);
 	if (!cq_host->mrq_slot)
 		return -ENOMEM;
 
