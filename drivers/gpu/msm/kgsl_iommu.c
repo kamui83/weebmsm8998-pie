@@ -362,8 +362,8 @@ static int _iommu_map_sync_pc(struct kgsl_pagetable *pt,
 	_iommu_sync_mmu_pc(false);
 
 	if (ret) {
-		KGSL_CORE_ERR("map err: 0x%016llX, 0x%lx, 0x%x, %d\n",
-			gpuaddr, PAGE_SIZE * times, flags, ret);
+		KGSL_CORE_ERR("map err: 0x%016llX, 0x%llx, 0x%x, %d\n",
+			gpuaddr, size, flags, ret);
 		return -ENODEV;
 	}
 
