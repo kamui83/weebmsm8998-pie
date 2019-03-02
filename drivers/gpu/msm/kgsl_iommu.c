@@ -205,7 +205,7 @@ static void kgsl_iommu_add_global(struct kgsl_mmu *mmu,
 
 	memdesc->gpuaddr = KGSL_IOMMU_GLOBAL_MEM_BASE(mmu) + global_pt_alloc;
 	memdesc->priv |= KGSL_MEMDESC_GLOBAL;
-	global_pt_alloc += kgsl_memdesc_footprint(memdesc);
+	global_pt_alloc += memdesc->size;
 
 	global_pt_entries[global_pt_count].memdesc = memdesc;
 	strlcpy(global_pt_entries[global_pt_count].name, name,
@@ -483,7 +483,7 @@ static int _iommu_map_sg_sync_pc(struct kgsl_pagetable *pt,
  */
 
 static struct page *kgsl_guard_page;
-static struct page *kgsl_secure_guard_page;
+static struct kgsl_memdesc kgsl_secure_guard_page_memdesc;
 
 /*
  * The dummy page is a placeholder/extra page to be used for sparse mappings.
@@ -1373,8 +1373,7 @@ static void kgsl_iommu_close(struct kgsl_mmu *mmu)
 	if (iommu->regbase != NULL)
 		iounmap(iommu->regbase);
 
-	kgsl_free_secure_page(kgsl_secure_guard_page);
-	kgsl_secure_guard_page = NULL;
+	kgsl_sharedmem_free(&kgsl_secure_guard_page_memdesc);
 
 	if (kgsl_guard_page != NULL) {
 		__free_page(kgsl_guard_page);
@@ -1643,11 +1642,9 @@ static int _iommu_map_guard_page(struct kgsl_pagetable *pt,
 				   uint64_t gpuaddr,
 				   unsigned int protflags)
 {
-	uint64_t pad_size;
 	phys_addr_t physaddr;
 
-	pad_size = kgsl_memdesc_footprint(memdesc) - memdesc->size;
-	if (!pad_size)
+	if (!kgsl_memdesc_has_guard_page(memdesc))
 		return 0;
 
 	/*
@@ -1657,16 +1654,21 @@ static int _iommu_map_guard_page(struct kgsl_pagetable *pt,
 	 * mapped to save 1MB of memory if CPZ is not used.
 	 */
 	if (kgsl_memdesc_is_secured(memdesc)) {
-		if (!kgsl_secure_guard_page) {
-			kgsl_secure_guard_page = kgsl_alloc_secure_page();
-			if (!kgsl_secure_guard_page) {
+		struct scatterlist *sg;
+		unsigned int sgp_size = pt->mmu->secure_align_mask + 1;
+
+		if (!kgsl_secure_guard_page_memdesc.sgt) {
+			if (kgsl_allocate_user(KGSL_MMU_DEVICE(pt->mmu),
+					&kgsl_secure_guard_page_memdesc,
+					sgp_size, KGSL_MEMFLAGS_SECURE)) {
 				KGSL_CORE_ERR(
 					"Secure guard page alloc failed\n");
 				return -ENOMEM;
 			}
 		}
 
-		physaddr = page_to_phys(kgsl_secure_guard_page);
+		sg = kgsl_secure_guard_page_memdesc.sgt->sgl;
+		physaddr = page_to_phys(sg_page(sg));
 	} else {
 		if (kgsl_guard_page == NULL) {
 			kgsl_guard_page = alloc_page(GFP_KERNEL | __GFP_ZERO |
