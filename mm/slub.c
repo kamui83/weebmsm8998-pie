@@ -3713,9 +3713,8 @@ static void list_slab_objects(struct kmem_cache *s, struct page *page,
 #ifdef CONFIG_SLUB_DEBUG
 	void *addr = page_address(page);
 	void *p;
-	unsigned long *map = kcalloc(BITS_TO_LONGS(page->objects),
-				     sizeof(long),
-				     GFP_ATOMIC);
+	unsigned long *map = kzalloc(BITS_TO_LONGS(page->objects) *
+				     sizeof(long), GFP_ATOMIC);
 	if (!map)
 		return;
 	slab_err(s, page, text, s->name);
@@ -4823,7 +4822,7 @@ static ssize_t show_slab_objects(struct kmem_cache *s,
 	int x;
 	unsigned long *nodes;
 
-	nodes = kcalloc(nr_node_ids, sizeof(unsigned long), GFP_KERNEL);
+	nodes = kzalloc(sizeof(unsigned long) * nr_node_ids, GFP_KERNEL);
 	if (!nodes)
 		return -ENOMEM;
 
