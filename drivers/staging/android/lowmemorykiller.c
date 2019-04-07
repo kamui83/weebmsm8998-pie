@@ -169,7 +169,7 @@ static unsigned long lowmem_scan(struct shrinker *s, struct shrink_control *sc)
 		task_lock(selected);
 		send_sig(SIGKILL, selected, 0);
 		if (selected->mm)
-			mark_oom_victim(selected);
+			task_set_lmk_waiting(selected);
 		task_unlock(selected);
 		trace_lowmemory_kill(selected, cache_size, cache_limit, free);
 		lowmem_print(1, "Killing '%s' (%d) (tgid %d), adj %hd,\n" \
